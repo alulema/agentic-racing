@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agentic Racing — Fase 0 spike</title>
+
+  <!-- Contrato de integración: tema del sitio en vivo, con fallback si no carga -->
+  <link rel="stylesheet" href="https://alexisalulema.com/demo-theme.css" />
+  <style>
+    :root {
+      /* Fallback mínimo por si demo-theme.css no carga (contrato sección "Estilo/branding") */
+      --color-bg: #0e0f12;
+      --color-bg-card: #17181c;
+      --color-border: #2a2c33;
+      --color-text: #e8e9ec;
+      --color-accent: #6ee7b7;
+      --font-sans: system-ui, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, monospace;
+      --radius: 8px;
+    }
+    body {
+      margin: 0;
+      background: var(--color-bg);
+      color: var(--color-text);
+      font-family: var(--font-sans);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+      padding: 1rem;
+    }
+    #unity-container { position: relative; }
+    #unity-canvas { width: 960px; height: 600px; background: #000; }
+    .panel {
+      width: 960px;
+      background: var(--color-bg-card);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: 0.75rem 1rem;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+    }
+    .panel h2 {
+      font-family: var(--font-sans);
+      font-size: 0.9rem;
+      margin: 0 0 0.5rem;
+      color: var(--color-accent);
+    }
+    #onnx-log { white-space: pre-wrap; word-break: break-all; min-height: 3em; }
+    button {
+      background: var(--color-accent);
+      color: var(--color-bg);
+      border: none;
+      border-radius: var(--radius);
+      padding: 0.4rem 0.8rem;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div id="unity-container">
+    <canvas id="unity-canvas" width="960" height="600" tabindex="-1"></canvas>
+  </div>
+
+  <div class="panel">
+    <h2>Fase 0 — ONNX + interop DOM ↔ Unity</h2>
+    <div id="onnx-log">(esperando mensaje de Unity...)</div>
+    <button id="rerun-btn">Re-ejecutar inferencia (DOM → Unity)</button>
+  </div>
+
+  <script>
+    // Escucha el evento que dispara Unity vía JsBridge.Send() / WebGLBridge.jslib
+    // (dirección Unity -> DOM del interop).
+    window.addEventListener('unity:message', (e) => {
+      document.querySelector('#onnx-log').textContent = e.detail;
+    });
+
+    // NOTE: "web-test" es el nombre del build de prueba de Fase 0. El pipeline
+    // de CI (GameCI) reemplazará esto por el nombre real del build al ensamblar
+    // /web junto con el Build/ de Unity.
+    const BUILD_NAME = "web-test";
+    const buildUrl = "Build";
+    const config = {
+      arguments: [],
+      dataUrl: `${buildUrl}/${BUILD_NAME}.data.br`,
+      frameworkUrl: `${buildUrl}/${BUILD_NAME}.framework.js.br`,
+      codeUrl: `${buildUrl}/${BUILD_NAME}.wasm.br`,
+      streamingAssetsUrl: "StreamingAssets",
+      companyName: "DefaultCompany",
+      productName: "agentic-racing",
+      productVersion: "0.1.0",
+    };
+
+    const canvas = document.querySelector("#unity-canvas");
+    let unityInstancePromise;
+
+    const script = document.createElement("script");
+    script.src = `${buildUrl}/${BUILD_NAME}.loader.js`;
+    script.onload = () => {
+      unityInstancePromise = createUnityInstance(canvas, config, (progress) => {
+        // Podríamos mostrar una barra de carga aquí; se omite en el spike.
+      });
+    };
+    document.body.appendChild(script);
+
+    // Dirección DOM -> Unity del interop: SendMessage llama al método público
+    // OnnxSmokeTest.RunInference() en el GameObject "Fase0SmokeTest".
+    document.querySelector('#rerun-btn').addEventListener('click', () => {
+      unityInstancePromise?.then((unityInstance) => {
+        unityInstance.SendMessage('Fase0SmokeTest', 'RunInference');
+      });
+    });
+  </script>
+</body>
+</html>
