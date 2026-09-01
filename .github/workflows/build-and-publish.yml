@@ -3,6 +3,8 @@ name: Build and publish
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch: {}
 
 env:
@@ -22,9 +24,11 @@ jobs:
           key: Library-unity-WebGL-${{ hashFiles('unity/Assets/**', 'unity/Packages/**', 'unity/ProjectSettings/**') }}
           restore-keys: Library-unity-WebGL-
 
-      # Requires the UNITY_LICENSE secret: a Personal license activated via
-      # the .alf -> .ulf flow (CLAUDE.md sección 8, humano-only). See
-      # https://game.ci/docs/github/activation for the activation steps.
+      # Requires UNITY_LICENSE (+ UNITY_EMAIL / UNITY_PASSWORD): a Personal
+      # license. Unity removed offline .alf -> .ulf activation for Personal
+      # seats, so the .ulf is generated with Unity Hub on Windows/macOS
+      # (C:\ProgramData\Unity\Unity_lic.ulf) and pasted into the secret.
+      # CLAUDE.md sección 8, humano-only. See docs/Devlog.md 2026-09-01.
       - uses: game-ci/unity-builder@v4
         env:
           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
@@ -66,7 +70,11 @@ jobs:
             cp -r unity-build-output/WebGL/StreamingAssets web/StreamingAssets
           fi
 
+      # On pull_request we build the image to prove docker/Dockerfile still
+      # compiles with the merged-in WebGL output, but we do NOT push: no login,
+      # push: false. The real GHCR publish only happens on push to main.
       - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -76,7 +84,7 @@ jobs:
         with:
           context: .
           file: docker/Dockerfile
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ github.sha }}
