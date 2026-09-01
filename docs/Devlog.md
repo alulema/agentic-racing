@@ -423,32 +423,60 @@ paquete público desde CI (workflow escrito, bloqueado por el secret `UNITY_LICE
 
 ---
 
-## ⏸ PARADA 2026-09-01 — retomar aquí
+## 2026-09-01 (cont.) — Commit de la validación + bloqueo de la licencia Unity
 
-**Dónde estamos**: Fase 0 sustancialmente cerrada. Todo validado en Docker real (las dos
-topologías). Solo queda pendiente el punto humano-only de GHCR/CI.
+**Commiteado**: `a41975d` en `fase-0-risk-spike` — "Fase 0: estratega LLM a Ollama local,
+validado en Docker (dos topologías)". Incluye `server/main.py`, `server/requirements.txt`,
+`docker/Dockerfile` (+`zstd`), `docker/Dockerfile.dev`, `compose.yaml`,
+`docker/entrypoint.sh`, `CLAUDE.md` (§5 checklist Fase 0), y las dos entradas de este
+Devlog. El working tree queda limpio.
 
-**Cambios SIN commitear** (working tree sucio, rama `fase-0-risk-spike`) — arrastran
-desde la sesión del cambio a Ollama (2026-08-31) más lo de hoy:
-- Modificados: `CLAUDE.md`, `docker/Dockerfile`, `docs/Devlog.md`, `server/main.py`,
-  `server/requirements.txt`.
-- Nuevos: `compose.yaml`, `docker/Dockerfile.dev`, `docker/entrypoint.sh`.
-- El venv `server/.venv` tiene `httpx` y ya no `anthropic` (no versionado).
+### Bloqueo: la licencia Unity Personal ya no se puede activar offline
 
-**Próximos pasos, en orden**:
-1. Commit de todo (decisión Ollama + validación + fix de `zstd`). Mensaje: cambio de LLM
-   hosted → local vía sidecar Ollama, validado en Docker.
-2. Decidir con el dueño si Fase 0 se cierra con PR ya (documentando el punto de GHCR/CI
-   como pendiente humano-only) o si se espera a la licencia Unity.
-3. Al abrir el PR de Fase 0: describir los 3 hallazgos del spike de riesgo
-   (BackendType.CPU para Inference Engine en WebGL; `zstd` en el Dockerfile; imagen
-   ~8.3 GB) y enlazar las entradas del Devlog.
+Al intentar el flujo `.alf → .ulf` (subir el `.alf` a `license.unity3d.com/manual`),
+Unity respondió: *"You are not eligible to activate your license offline. Offline
+activation is available only for Enterprise and Industry seats."* Unity **retiró la
+activación manual/offline para seats Personal** — es un cambio suyo, conocido en la
+comunidad de GameCI, no un error de configuración.
 
-**Pendientes humano-only que siguen abiertos** (no los toca el agente):
-- Activar licencia Unity para CI (`.alf`→`.ulf` como secret `UNITY_LICENSE`).
-- Marcar el paquete GHCR como público tras el primer push del workflow.
+Diagnóstico de esta máquina: el Editor **sí** está activado, pero con el **Licensing
+Client** de Unity 6, que guarda la entitlement como
+`~/.config/unity3d/Unity/licenses/UnityEntitlementLicense.xml`. Ese formato **no** es el
+`Unity_lic.ulf` portable que GameCI necesita, y **Linux + Unity 6 no genera un `.ulf`
+utilizable**. Windows y macOS con Unity Hub sí lo generan
+(`C:\ProgramData\Unity\Unity_lic.ulf` / `/Library/Application Support/Unity/Unity_lic.ulf`).
 
-**Para Fase 5 (anotado ahora para no perderlo)**:
+**Decisión tomada con el dueño**: opción A — generar el `.ulf` desde **Unity Hub en la
+partición Windows de esta NUC** (arranque dual). El dueño se encarga; requiere reiniciar
+a Windows. Es lo que la doc actual de GameCI (`game.ci/docs/github/activation`) recomienda
+para Personal. Alternativas descartadas por ahora: el hack de `display:none` en la web de
+Unity (frágil, puede que ya no exista el elemento), `game-ci/unity-license-activate`
+(automatiza el login web con Playwright; hacky), self-hosted runner, y build local +
+CI-solo-imagen (rompen §2).
+
+### Retomar aquí — próximos pasos, en orden
+
+1. **(Humano, en Windows)** Unity Hub → login con la cuenta Unity → *Preferences >
+   Licenses* → "Get a free personal license". Copiar `C:\ProgramData\Unity\Unity_lic.ulf`.
+2. **(Humano, en GitHub)** Repo `agentic-racing` → *Settings > Secrets and variables >
+   Actions*:
+   - `UNITY_LICENSE` = contenido completo del `.ulf` (XML, desde `<?xml` al final).
+   - `UNITY_EMAIL` = email de la cuenta Unity.
+   - `UNITY_PASSWORD` = password de la cuenta Unity.
+   (El workflow `build-and-publish.yml` ya referencia los tres.)
+3. **(Humano)** Lanzar el workflow `Build and publish` (push a `main` o `workflow_dispatch`).
+   Primer run: verificar que GameCI activa la licencia y que el build de WebGL con
+   `unityVersion: 6000.3.22f1` compila.
+4. **(Humano, una vez)** Tras el primer push a GHCR: *Package settings* → visibilidad
+   **Public** (la infra efímera lo jala sin credenciales — contrato punto 7).
+5. **(Agente)** Con CI verde: cerrar Fase 0 con PR de `fase-0-risk-spike` → `main`.
+   Describir los 3 hallazgos del spike (BackendType.CPU para Inference Engine en WebGL;
+   `zstd` en el Dockerfile; imagen ~8.3 GB) y enlazar las entradas de este Devlog.
+
+**Estado de Fase 0**: todo lo que puede hacer el agente está hecho y validado. El único
+pendiente es la cadena licencia Unity → CI verde → GHCR público, que es humano-only.
+
+**Para Fase 5 (anotado para no perderlo)**:
 - Adelgazar la imagen: quitar libs GPU del runtime de Ollama (`rocm`, CUDA) — el pod es
   CPU-only. Objetivo: bajar de ~8.3 GB.
 - Implementar `/api/health` y `/api/ping` (y revisar por qué `HEAD` da 405 en la ruta
