@@ -269,14 +269,187 @@ sistema (`ms=3,40` con coma decimal en locale ES), lo que rompe un string de dia
 pensado para parsearse. Ahora usa `CultureInfo.InvariantCulture` en `ToString("F3")` /
 `ToString("F2")`.
 
-**Estado del checklist de Fase 0 tras esto** (ver `CLAUDE.md` §5): pasan todos menos dos,
-ambos por dependencias externas —
+**Estado del checklist de Fase 0 tras esto** (ver `CLAUDE.md` §5): pasan todos menos dos —
 1. Publicar la imagen a GHCR público desde CI: workflow escrito, sin correr, bloqueado por
    el secret `UNITY_LICENSE` (humano-only, `CLAUDE.md` §8).
-2. Llamada en vivo a `/api/strategy`: endpoint escrito y arranca, pero esta máquina no
-   tiene `ANTHROPIC_API_KEY` para probar la llamada real.
+2. Llamada en vivo a `/api/strategy`: endpoint escrito y arranca. Ver la sección de más
+   abajo — el backend del LLM cambió de Anthropic hosted a Ollama local en esta misma
+   sesión, y la validación quedó a medias (plumbing OK, falta contra `llama3.2:3b`).
 
 **Cambios de código de esta sesión**: `unity/Assets/Editor/Fase0BatchBuild.cs` (OutputDir),
 `unity/Assets/Scripts/Diagnostics/OnnxSmokeTest.cs` (InvariantCulture),
 `unity/Assets/Scenes/SampleScene.unity` (el batch build re-guardó la escena con el
 GameObject `Fase0SmokeTest`), más este `Devlog.md` y el checklist de `CLAUDE.md`.
+
+### Decisión revisada: el estratega LLM pasa a modelo local (Ollama), no API hosted
+
+Al revisar el pendiente "probar `/api/strategy` con `ANTHROPIC_API_KEY`", el dueño del
+proyecto planteó que **no pensaba usar modelos de Anthropic** y preguntó por un modelo
+local vía Ollama en contenedor.
+
+Se revisó el contrato (`DEMO_INTEGRATION.md`): **lo permite explícitamente**. El punto 6
+nombra "Claude (no Azure OpenAI)" solo como *ejemplo* de opción aceptable, no como
+requisito, y el demo de referencia del propio contrato (`rag-blogposts`) es
+autohospedado con Ollama + un modelo local, con números concretos de sizing (pod
+2 vCPU / 4 GiB CPU-only, Qwen 0.5B → primer token ~6-7 s). Así que la decisión de
+`CLAUDE.md` §2 (`claude-haiku-4-5` hosted) era de diseño, no contractual.
+
+**Decidido** (queda como §2.5 de `CLAUDE.md`, decisión de sección 2 cerrada en su nueva
+forma):
+
+- Estratega en **`llama3.2:3b`** (tag de Ollama; es el build instruct/q4_K_M, ~2 GB),
+  servido por un **sidecar Ollama CPU-only** en la misma imagen.
+- **Pesos horneados en la imagen**, no `ollama pull` al arrancar — arranque
+  determinista y sin red, a cambio de +~2 GB de imagen que la infra jala en cada
+  provisión (el mayor golpe al riesgo "peso de imagen" de §11).
+- **Sin secretos**: se elimina `ANTHROPIC_API_KEY` de §2.2 y del hand-off manifest.
+- El riesgo #1 del proyecto (§7, "tráfico no acotado" contra una API medida) desaparece
+  como coste y se reconvierte en **saturación de CPU**: 6 estrategas serializados contra
+  un Ollama sin GPU. Los guardrails de §7 se reescribieron en esa clave (cooldown por
+  auto, límite de concurrencia, cortacircuitos a "modo offline").
+
+Motivos que se sopesaron y se documentaron en la respuesta al dueño: 6 cerebros LLM
+independientes (§6.7) contra el pod chico, JSON estricto con enums (§6.4/§6.8) que un
+modelo 3B acierta menos que uno hosted, latencia CPU ~5-15 s/respuesta (aceptable porque
+§6.6 dice que la carrera nunca espera al LLM), y peso de imagen. Alternativas
+descartadas: API hosted no-Anthropic (Groq/Together) y Ollama externo en caja propia.
+
+**Cambios de código por esta decisión**:
+
+- `server/main.py`: `/api/strategy` deja la SDK `anthropic` y llama a Ollama
+  (`POST /api/chat`) con **structured output** — se pasa el JSON Schema del modelo
+  Pydantic como `format`, que fuerza la forma exacta (mejor adherencia a enums con un
+  3B que `format: "json"` a secas). Se mantiene la validación Pydantic
+  (`model_validate_json`); respuesta que no valida → 502, se descarta entera (§6.8).
+  `num_predict` topado a 150 (§7). `keep_alive: 30m` para no recargar el modelo (§6.7).
+  `OLLAMA_URL` / `OLLAMA_MODEL` por env.
+- `server/requirements.txt`: fuera `anthropic`, dentro `httpx==0.28.1`.
+- `docker/Dockerfile`: reescrito a imagen única con Ollama instalado + `llama3.2:3b`
+  horneado (`ollama serve` efímero durante el build para el `pull`) + `entrypoint.sh`
+  como supervisor (arranca `ollama serve`, espera readiness, calienta el modelo, hace
+  `exec uvicorn`).
+- `docker/Dockerfile.dev` + `compose.yaml` (nuevo, en la raíz): loop de dev que espeja
+  la topología de producción sin hornear 2 GB en cada cambio — Ollama como servicio
+  con volumen, `ollama-init` hace el `pull` una vez, `app` con `--reload`.
+- `CLAUDE.md`: §2 (tabla), nueva §2.5, §2.2, §3, §4, §5 (Fase 0/4/5), §6.7 (de "prompt
+  caching" a "reutilización de KV-cache de Ollama"), §7 (de "guardrails de costo" a
+  "guardrails de carga"), §8 (fuera "tope de presupuesto en consola de Anthropic"), §11.
+
+**Validación en esta máquina**:
+
+- Plumbing de `/api/strategy` verificado primero contra `qwen2.5:1.5b-instruct` (ya
+  presente en el Ollama local, 0.24.0): `HTTP 200` con JSON válido contra el esquema.
+- Luego contra **`llama3.2:3b`** (el modelo elegido, recién descargado al Ollama local):
+  - 1ª llamada (en frío): `HTTP 200`, **7.5 s**, `{"directive":"push","radio":"Gaps are
+    looking good, let's push the pace on the next lap."}` — 10 palabras.
+  - 2ª llamada (caliente): `HTTP 200`, **3.5 s**, `{"directive":"push","radio":"Lap 3,
+    focus on closing the gap to P1, smooth acceleration out of turn 2"}` — 13 palabras.
+  - Ambas validan contra el esquema (`directive` enum correcto, `radio` string, dentro
+    del límite de 15 palabras sin recorte). El structured output de Ollama (`format` =
+    JSON Schema) + validación Pydantic funcionan end-to-end con el modelo real.
+  - Latencia CPU 3.5–7.5 s: dentro del "~5-15 s" documentado en `CLAUDE.md` §2.5 y
+    aceptable por §6.6 (la carrera nunca espera al LLM).
+
+**Checklist de Fase 0 — punto del LLM**: el plumbing y el modelo real están validados
+localmente (uvicorn + Ollama del host). **Falta** validar el mismo flujo vía
+`docker compose up` (app + servicio Ollama) y vía la **imagen final** (`docker build`
+sobre `docker/Dockerfile` + `docker run`, que hornea el modelo).
+
+---
+
+## 2026-09-01 — Validación de `/api/strategy` con Ollama en las dos topologías
+
+Se retomó desde la PARADA 2026-08-31, pasos 1 y 2 (validar el estratega LLM local
+end-to-end vía Docker, no solo con uvicorn + Ollama del host).
+
+### Topología de dev — `docker compose up --build`
+
+`compose.yaml` levanta `ollama` (imagen oficial + volumen), `ollama-init` (one-shot,
+`ollama pull llama3.2:3b` al volumen) y `app` (`Dockerfile.dev`, sin modelo horneado,
+`--reload`). Primer arranque: descarga de la imagen `ollama/ollama` + 2.0 GB de pesos al
+volumen (~4 min a ~8 MB/s). Tras eso:
+
+- `GET /api/strategy` en frío (primera inferencia, carga del modelo a RAM): `HTTP 200`,
+  **6.79 s**, `{"directive":"push","radio":"Gaps are getting bigger, let's push, let's
+  close that gap!"}` — 10 palabras.
+- En caliente: `HTTP 200`, **2.44 s**, JSON válido, 11 palabras.
+- Ambas validan contra `StrategySmokeTestResponse` (enum `directive` correcto, `radio`
+  string dentro de 15 palabras).
+
+### Imagen final — `docker build -f docker/Dockerfile` + `docker run`
+
+**Bug encontrado y corregido**: el primer `docker build` falló en el paso
+`RUN curl -fsSL https://ollama.com/install.sh | sh` con
+`ERROR: This version requires zstd for extraction`. El instalador de Ollama ahora
+distribuye su tarball comprimido con zstd y aborta si el binario `zstd` no está. Fix:
+añadir `zstd` a la línea `apt-get install` del `Dockerfile` (junto a `curl` y
+`ca-certificates`). Con eso el build completa.
+
+Build OK → `agentic-racing:fase0`. `docker run -p 8080:8080 -e PROJECT_ID=agentic-racing
+-e DEMO_SLOT=demo01`:
+
+- `entrypoint.sh` arranca `ollama serve`, espera readiness, calienta el modelo
+  (`POST /api/chat` → `200` en 4.35 s) y hace `exec uvicorn`. Logs limpios.
+- `GET /api/strategy`: `HTTP 200`, ~3.7 s, JSON válido contra el esquema. (Una de las
+  respuestas se pasó de 15 palabras en el campo `radio` — el esquema de Fase 0 no
+  fuerza el límite de palabras; el recorte a 15 es cliente-side en Fase 4, §6.8. No
+  bloquea.)
+- Estáticos: `GET /` y `GET /index.html` → `200 text/html`. Guard de path traversal
+  (`/../etc/passwd`) → `404`. `HEAD /` → `405` (Starlette no está exponiendo HEAD en la
+  ruta catch-all; irrelevante para el browser que carga el build con GET, pero anotado
+  por si un proxy hace healthcheck con HEAD — los endpoints de salud reales son
+  `/api/health` y `/api/ping`, aún sin implementar, Fase 4/5).
+- `ollama` escucha **solo en loopback** dentro del contenedor (`curl
+  127.0.0.1:11434/api/version` OK desde dentro; no publicado al host).
+
+**Hallazgo de peso de imagen**: `agentic-racing:fase0` pesa **~8.3 GB**. Desglose por
+`docker history`: capa del instalador de Ollama **2.25 GB** (trae libs de GPU
+ROCm/CUDA que en este demo CPU-only no se usan), modelo horneado **2.0 GB**, base
+`python:3.13-slim` + toolchain ~1.5 GB, resto. Esto contradice el "+~2 GB" que asumen
+`CLAUDE.md` §2.5/§3/§11 — el runtime de Ollama por sí solo añade otros ~2.25 GB. Va a
+Fase 5 como trabajo de optimización (candidato claro: borrar
+`/usr/local/lib/ollama/rocm` y libs CUDA tras la instalación; el pod de la infra es
+CPU-only). Riesgo §11 "peso del build + modelo horneado" confirmado y peor de lo
+estimado.
+
+### Estado del checklist de Fase 0 tras esto
+
+Pasan todos los puntos salvo **uno**, que es humano-only: publicar la imagen a GHCR como
+paquete público desde CI (workflow escrito, bloqueado por el secret `UNITY_LICENSE`,
+`CLAUDE.md` §8). El punto del LLM queda `[x]` en `CLAUDE.md` §5.
+
+**Cambios de código de esta sesión**: `docker/Dockerfile` (+`zstd`). `CLAUDE.md` §5
+(checklist Fase 0, punto LLM). Este `Devlog.md`.
+
+---
+
+## ⏸ PARADA 2026-09-01 — retomar aquí
+
+**Dónde estamos**: Fase 0 sustancialmente cerrada. Todo validado en Docker real (las dos
+topologías). Solo queda pendiente el punto humano-only de GHCR/CI.
+
+**Cambios SIN commitear** (working tree sucio, rama `fase-0-risk-spike`) — arrastran
+desde la sesión del cambio a Ollama (2026-08-31) más lo de hoy:
+- Modificados: `CLAUDE.md`, `docker/Dockerfile`, `docs/Devlog.md`, `server/main.py`,
+  `server/requirements.txt`.
+- Nuevos: `compose.yaml`, `docker/Dockerfile.dev`, `docker/entrypoint.sh`.
+- El venv `server/.venv` tiene `httpx` y ya no `anthropic` (no versionado).
+
+**Próximos pasos, en orden**:
+1. Commit de todo (decisión Ollama + validación + fix de `zstd`). Mensaje: cambio de LLM
+   hosted → local vía sidecar Ollama, validado en Docker.
+2. Decidir con el dueño si Fase 0 se cierra con PR ya (documentando el punto de GHCR/CI
+   como pendiente humano-only) o si se espera a la licencia Unity.
+3. Al abrir el PR de Fase 0: describir los 3 hallazgos del spike de riesgo
+   (BackendType.CPU para Inference Engine en WebGL; `zstd` en el Dockerfile; imagen
+   ~8.3 GB) y enlazar las entradas del Devlog.
+
+**Pendientes humano-only que siguen abiertos** (no los toca el agente):
+- Activar licencia Unity para CI (`.alf`→`.ulf` como secret `UNITY_LICENSE`).
+- Marcar el paquete GHCR como público tras el primer push del workflow.
+
+**Para Fase 5 (anotado ahora para no perderlo)**:
+- Adelgazar la imagen: quitar libs GPU del runtime de Ollama (`rocm`, CUDA) — el pod es
+  CPU-only. Objetivo: bajar de ~8.3 GB.
+- Implementar `/api/health` y `/api/ping` (y revisar por qué `HEAD` da 405 en la ruta
+  catch-all de estáticos).
