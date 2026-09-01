@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using AgenticRacing.Interop;
 using Unity.InferenceEngine;
 using UnityEngine;
@@ -61,8 +62,12 @@ namespace AgenticRacing.Diagnostics
             var result = output != null ? output.DownloadToArray() : System.Array.Empty<float>();
             stopwatch.Stop();
 
-            var resultStr = string.Join(",", System.Array.ConvertAll(result, v => v.ToString("F3")));
-            Report($"onnx_ok:backend={backend},ms={stopwatch.Elapsed.TotalMilliseconds:F2},output=[{resultStr}]");
+            // InvariantCulture so the diagnostic string stays machine-parseable
+            // (a locale that uses ',' as decimal separator would break "F3"/"F2").
+            var resultStr = string.Join(",", System.Array.ConvertAll(
+                result, v => v.ToString("F3", CultureInfo.InvariantCulture)));
+            var ms = stopwatch.Elapsed.TotalMilliseconds.ToString("F2", CultureInfo.InvariantCulture);
+            Report($"onnx_ok:backend={backend},ms={ms},output=[{resultStr}]");
         }
 
         private void Report(string message, bool isError = false)

@@ -221,23 +221,29 @@ aceptación de la actual pasen. Cada fase termina en un PR.
 
 No empieces por el juego. Valida primero lo que puede matar el proyecto.
 
-- [ ] Leer `DEMO_INTEGRATION.md` completo antes de escribir nada
-- [ ] Proyecto Unity vacío exporta a WebGL, con **rutas relativas**, y corre en browser
-      servido desde la raíz `/`
-- [ ] FastAPI sirve ese build con los **headers correctos para archivos `.br`/`.gz`** de
-      Unity, en `0.0.0.0:8080`
-- [ ] La imagen se publica a **GHCR como paquete público** desde CI
-- [ ] `docker run -p 8080:8080 -e PROJECT_ID=agentic-racing -e DEMO_SLOT=demo01` funciona
+- [x] Leer `DEMO_INTEGRATION.md` completo antes de escribir nada
+- [x] Proyecto Unity vacío exporta a WebGL, con **rutas relativas**, y corre en browser
+      servido desde la raíz `/` — validado en navegador real 2026-08-31
+- [x] FastAPI sirve ese build con los **headers correctos para archivos `.br`/`.gz`** de
+      Unity, en `0.0.0.0:8080` — `Content-Encoding` + `Content-Type` verificados por `curl`
+      y en navegador
+- [ ] La imagen se publica a **GHCR como paquete público** desde CI — workflow escrito, sin
+      correr (bloqueado por secret `UNITY_LICENSE`, humano-only)
+- [x] `docker run -p 8080:8080 -e PROJECT_ID=agentic-racing -e DEMO_SLOT=demo01` funciona
       localmente — es la prueba que el contrato define como suficiente
-- [ ] Un modelo ONNX de juguete (red densa trivial, 3 inputs → 2 outputs) carga con
-      `com.unity.ai.inference` y ejecuta inferencia **dentro del build WebGL**
-- [ ] Queda documentado qué `BackendType` funciona en WebGL y cuál es el costo por
-      inferencia, extrapolado a 6 autos simultáneos
-- [ ] **Interop DOM ↔ Unity funcionando en ambas direcciones**: un botón HTML fuera del
+- [x] Un modelo ONNX de juguete (red densa trivial, 3 inputs → 2 outputs) carga con
+      `com.unity.ai.inference` y ejecuta inferencia **dentro del build WebGL** — `onnx_ok`,
+      salida `[2.600, 3.400]` correcta, en navegador real 2026-08-31
+- [x] Queda documentado qué `BackendType` funciona en WebGL y cuál es el costo por
+      inferencia, extrapolado a 6 autos simultáneos — `BackendType.CPU`; 3.40 ms en frío
+      (crea `Worker` + warmup), 0.10 ms en caliente; ~0.6 ms/frame para 6 autos en caliente.
+      Modelo de juguete 3→2: es un piso, el MLP real de Fase 2 será mayor. Ver `docs/Devlog.md`
+- [x] **Interop DOM ↔ Unity funcionando en ambas direcciones**: un botón HTML fuera del
       canvas cambia algo en la escena, y un evento de la escena actualiza un elemento DOM.
-      Todo el HUD depende de esto.
-- [ ] El overlay DOM enlaza `demo-theme.css` y usa sus variables CSS
-- [ ] Una llamada al LLM vía `/api/strategy` devuelve JSON válido, con la key leída de env
+      Todo el HUD depende de esto. — ambas direcciones validadas en navegador 2026-08-31
+- [x] El overlay DOM enlaza `demo-theme.css` y usa sus variables CSS (con fallback si no carga)
+- [ ] Una llamada al LLM vía `/api/strategy` devuelve JSON válido, con la key leída de env —
+      endpoint escrito, sin probar en vivo (esta máquina no tiene `ANTHROPIC_API_KEY`)
 
 **Criterio de aceptación**: todo lo anterior funciona en el entorno de despliegue real, no
 solo en el editor. Si la inferencia con Inference Engine falla en WebGL, toda la

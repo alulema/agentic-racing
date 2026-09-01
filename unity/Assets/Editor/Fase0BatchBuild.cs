@@ -15,7 +15,10 @@ namespace AgenticRacing.EditorTools
     public static class Fase0BatchBuild
     {
         private const string ScenePath = "Assets/Scenes/SampleScene.unity";
-        private const string OutputDir = "Builds/fase0-onnx-interop";
+        // Output name must match BUILD_NAME in web/index.html ("web-test") so the
+        // DOM shell finds Build/web-test.* — Unity names the player files after
+        // the last path segment of locationPathName.
+        private const string OutputDir = "Builds/web-test";
 
         public static void Build()
         {

@@ -169,3 +169,114 @@ necesitar un cambio manual de visibilidad a Public en GitHub (contrato, punto 7)
 4. Los puntos humano-only siguen pendientes de que el humano los haga: activar licencia
    Unity para CI (`.alf`→`.ulf` como secret `UNITY_LICENSE`), y — cuando se corra el
    workflow por primera vez — marcar el paquete GHCR como público.
+
+---
+
+## 2026-08-31 — Revisión de estado, sin cambios de código
+
+Sesión de revisión: se pidió el estado actual del proyecto y luego actualizar esta
+bitácora. No se escribió ni modificó código.
+
+**Estado del repo verificado**:
+- Rama `fase-0-risk-spike`, árbol de trabajo limpio, sincronizada con
+  `origin/fase-0-risk-spike`. Commits: `fb9375e` (initial) + `100bdfc`
+  ("Fase 0 (WIP): pista Unity+FastAPI+Docker validada, ONNX+interop en curso"). Sin PR
+  abierto. Nada que commitear ni pushear en esta sesión.
+- Todo lo fuera de control de versiones (`unity/Builds/`, `unity/UserSettings/`,
+  `unity/.vscode/`, `.csproj` generados, `server/.venv/`) está cubierto por `.gitignore`
+  a propósito.
+
+**Hallazgos de la revisión** (contra el checklist de Fase 0 en `CLAUDE.md` §5):
+- El build headless de Web de la sesión del 23-ago **sí terminó**: `unity/Builds/web-test/Build/`
+  contiene los cuatro archivos esperados —`web-test.loader.js`, `web-test.data.br` (4.4 MB),
+  `web-test.framework.js.br` (76 KB), `web-test.wasm.br` (8.1 MB)—, con fecha 23-ago 21:24–21:26.
+  Sigue **pendiente** verificarlo corriendo en un navegador real y medir el costo por
+  inferencia del ONNX de juguete; el pendiente #1 de la sesión anterior se mantiene.
+- `com.unity.ai.inference` fijado en `2.6.1` en `unity/Packages/manifest.json`.
+  `com.unity.ml-agents` **todavía no está** en el manifest — es dependencia de Fase 2, no
+  bloquea Fase 0, pero al agregarlo hay que verificar que no entre en conflicto de versión
+  con `com.unity.ai.inference` (`CLAUDE.md` §9/§11).
+- `server/requirements.txt`: `fastapi==0.115.6`, `uvicorn[standard]==0.34.0`,
+  `anthropic==1.0.0`.
+- Unity fijado en `6000.3.22f1` (`ProjectVersion.txt`), coincide con `CLAUDE.md` §9.
+
+**Pendientes sin cambios respecto al 23-ago**: los cuatro puntos de "Pendiente para la
+próxima sesión" de la entrada anterior siguen todos abiertos.
+
+### Validación en navegador real: ONNX + interop (checklist de Fase 0)
+
+Retomado en la misma sesión. Se montó el build y se abrió en un navegador real
+(Chrome, vía la integración Claude-in-Chrome) sirviéndolo con `server/main.py`.
+
+**Primer intento — falló, y por qué**: el build `unity/Builds/web-test/` que había en
+disco era el de la escena vacía del Punto 1 (23-ago 21:24), **anterior** a que
+`SampleScene` se guardara con el GameObject `Fase0SmokeTest` (23-ago 22:16). El build que
+sí lo incluía (`Fase0BatchBuild` → `Builds/fase0-onnx-interop/`) nunca llegó a
+completarse: quedó a medias al pausar la sesión del 23-ago. Síntomas en el navegador:
+Unity arrancaba bien (`Initialize engine version: 6000.3.22f1`, WebGL 2.0, PhysX), el
+panel se quedaba en "(esperando mensaje de Unity…)", y al pulsar el botón la consola
+tiraba `SendMessage: object Fase0SmokeTest not found!`. Los `ERROR: Shader Hidden/...`
+de URP en consola son ruido del GPU headless, no relacionados.
+
+**Corrección**: `Fase0BatchBuild.cs` — `OutputDir` cambiado de `Builds/fase0-onnx-interop`
+a `Builds/web-test`, para que Unity nombre los archivos del player `web-test.*` y
+coincidan con `BUILD_NAME = "web-test"` de `web/index.html` (Unity nombra el player según
+el último segmento de `locationPathName`). El directorio anterior era descartable.
+
+**Build headless relanzado** en esta máquina (Unity `6000.3.22f1` en
+`~/Unity/Hub/Editor/`, sin Editor abierto, licencia local ya activada):
+
+```
+~/Unity/Hub/Editor/6000.3.22f1/Editor/Unity -batchmode -nographics -quit \
+  -projectPath unity -executeMethod AgenticRacing.EditorTools.Fase0BatchBuild.Build -logFile -
+```
+
+Resultado: `[Fase0BatchBuild] result=Succeeded totalErrors=0 size=16860517` (~16 MB sin
+comprimir). Comprimido: `web-test.wasm.br` 10.6 MB + `web-test.data.br` 6.1 MB — subió
+~4 MB frente al build vacío, por incluir Inference Engine + el `.onnx`. A vigilar en
+Fase 5 (peso del build, riesgo conocido de `CLAUDE.md` §11).
+
+**Segundo intento — pasa**. Recargando la página con el build nuevo, el panel DOM muestra
+(empujado desde Unity vía `CustomEvent('unity:message')`):
+
+```
+onnx_ok:backend=CPU,ms=3.40,output=[2.600,3.400]
+```
+
+- **ONNX carga y ejecuta inferencia dentro del build WebGL** (no editor). `com.unity.ai.inference`
+  2.6.1 funciona en WebGL.
+- **`BackendType` que funciona en WebGL: `CPU`** — como anticipaba el riesgo de `CLAUDE.md`
+  §11, no se asumió `GPUCompute`.
+- **Salida correcta**: `[2.600, 3.400]` es exactamente el valor calculado a mano en
+  `make_toy_onnx.py` (`Gemm([1,2,3]) + B → [2.6, 3.4] → ReLU` sin cambio). La inferencia
+  es numéricamente correcta, no basura.
+- **Costo por inferencia**: 1ª ejecución **3.40 ms** (fría: incluye crear el `Worker` +
+  warmup), ejecuciones siguientes **0.10 ms** (caliente). Extrapolado a 6 autos en
+  caliente: ~0.6 ms/frame. El modelo de juguete es 3→2 trivial; el MLP real de Fase 2 con
+  raycasts será bastante mayor, así que **este número es un piso**, no la estimación final.
+  Cuando exista la red real hay que re-medir.
+- **Interop Unity → DOM**: el panel recibió el mensaje sin tocar ningún id de elemento
+  (el `.jslib` despacha un `CustomEvent` en `window`).
+- **Interop DOM → Unity**: el botón "Re-ejecutar inferencia" disparó una inferencia nueva
+  vía `unityInstance.SendMessage('Fase0SmokeTest', 'RunInference')` — panel actualizado en
+  vivo, sin `object not found`.
+- **`web/index.html`**: el `demo-theme.css` remoto no carga en local (sin red al dominio),
+  pero las variables CSS de fallback aplican y el panel se ve estilado — la cadena
+  `var(--color-*)` funciona.
+
+**Nit corregido de paso**: `OnnxSmokeTest.cs` formateaba los números con la cultura del
+sistema (`ms=3,40` con coma decimal en locale ES), lo que rompe un string de diagnóstico
+pensado para parsearse. Ahora usa `CultureInfo.InvariantCulture` en `ToString("F3")` /
+`ToString("F2")`.
+
+**Estado del checklist de Fase 0 tras esto** (ver `CLAUDE.md` §5): pasan todos menos dos,
+ambos por dependencias externas —
+1. Publicar la imagen a GHCR público desde CI: workflow escrito, sin correr, bloqueado por
+   el secret `UNITY_LICENSE` (humano-only, `CLAUDE.md` §8).
+2. Llamada en vivo a `/api/strategy`: endpoint escrito y arranca, pero esta máquina no
+   tiene `ANTHROPIC_API_KEY` para probar la llamada real.
+
+**Cambios de código de esta sesión**: `unity/Assets/Editor/Fase0BatchBuild.cs` (OutputDir),
+`unity/Assets/Scripts/Diagnostics/OnnxSmokeTest.cs` (InvariantCulture),
+`unity/Assets/Scenes/SampleScene.unity` (el batch build re-guardó la escena con el
+GameObject `Fase0SmokeTest`), más este `Devlog.md` y el checklist de `CLAUDE.md`.
