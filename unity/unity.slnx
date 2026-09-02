@@ -1,4 +1,6 @@
 ﻿<Solution>
   <Project Path="Assembly-CSharp-Editor.csproj" />
+  <Project Path="AgenticRacing.Track.csproj" />
   <Project Path="Assembly-CSharp.csproj" />
+  <Project Path="AgenticRacing.Tests.EditMode.csproj" />
 </Solution>

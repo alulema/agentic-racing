@@ -493,19 +493,100 @@ Con esto, **los tres puntos de riesgo que dependían de CI quedan verificados de
 reproducible**: (a) la licencia Unity Personal activa en CI, (b) el WebGL compila en CI,
 (c) la imagen Docker arma en CI con el WebGL mergeado.
 
-### Retomar aquí — lo único que queda de Fase 0 (humano-only, post-merge)
+### Cierre de Fase 0 — confirmado
 
-1. **Mergear el PR #1 a `main`.** Eso dispara el run con `push:main` → `docker login` +
-   `push: true` → primera imagen a `ghcr.io/alulema/agentic-racing`.
-2. **Marcar el paquete GHCR como Público** (*Packages → agentic-racing → Package settings
-   → Change visibility → Public*). La infra efímera lo jala sin credenciales (contrato
-   punto 7).
+- PR #1 **mergeado** a `main` (merge commit `f88c830`, 2026-09-02 13:01 UTC).
+- Run de CI con `push:main` (`33633279640`) ✅: compiló WebGL, `docker login` a GHCR y
+  `push: true`.
+- **Imagen pública en GHCR** verificada con token anónimo de `ghcr.io` (sin credenciales):
+  `manifests/latest` → `HTTP 200`, `tags/list` → `latest` + `<sha>`, ambos tags al mismo
+  digest `sha256:a17ec970…`. Manifest single-platform `linux/amd64` (sin índice
+  multi-arch). **Tamaño en registry: ~3.49 GiB comprimido / 14 capas** — los ~8.3 GB de
+  antes eran sin comprimir; lo que la infra descarga por provisión es la mitad.
 
-**Estado de Fase 0**: todo lo verificable por el agente está hecho y verde en CI. Solo
-resta merge + push inicial a GHCR + visibilidad pública, que es humano-only.
+Todos los criterios de aceptación de Fase 0 (§5) pasan.
 
 **Para Fase 5 (anotado para no perderlo)**:
 - Adelgazar la imagen: quitar libs GPU del runtime de Ollama (`rocm`, CUDA) — el pod es
-  CPU-only. Objetivo: bajar de ~8.3 GB.
+  CPU-only. Objetivo: bajar de ~8.3 GB sin comprimir.
 - Implementar `/api/health` y `/api/ping` (y revisar por qué `HEAD` da 405 en la ruta
   catch-all de estáticos).
+
+---
+
+## 2026-09-02 — Fase 1 · Iteración 1: generación procedural del circuito cerrado
+
+Rama `fase-1-track-fisica` desde `main` (`f88c830`). Fase 1 se hace en 3 iteraciones;
+ésta cubre solo el **núcleo de generación de pista**. Numeración de curvas, racing line,
+física del auto + teclado, y conteo de vueltas / cruce de meta quedan para las iteraciones
+2 y 3.
+
+### Qué se implementó — `unity/Assets/Scripts/Track/` (asmdef `AgenticRacing.Track`)
+
+- **`CatmullRomSpline.cs`** — spline Catmull-Rom **centrípeta** (α = 0.5), cíclica y
+  C1-continua incluida la junta de cierre. La variante centrípeta se eligió a propósito:
+  no genera cúspides ni auto-intersecciones *dentro* de un segmento aunque los puntos de
+  control estén desigualmente espaciados (importa para un circuito jitterado). Incluye
+  `SampleClosed` y `ResampleByArcLength`.
+- **`TrackGenerator.cs`** — `int seed` → `System.Random(seed)` (nunca `UnityEngine.Random`,
+  §10) → 9–14 puntos de control en lazo con jitter radial (−25 %..+30 %) y angular
+  (0.45× el paso, acotado para que el ángulo sea monótono y el lazo no se pliegue) →
+  spline → centerline reesampleada a 2 m. Escala determinista a **1.5–2.5 km**. Valida
+  **sin auto-intersección** (test segmento-segmento O(n²), sólo en generación) y **radio
+  de curva mínimo ≥ 12 m** (curvatura de Menger sobre un **stencil de ~6 m**, no entre
+  puntos adyacentes — ver bug abajo). Si falla → deriva seed con hash SplitMix32 y
+  reintenta (máx. 32), registrando `EffectiveSeed`/`Attempts` en un solo `Debug.Log`.
+- **`TrackMeshBuilder.cs`** — mesh de cinta plana (Y = 0) a lo largo de la centerline,
+  cerrada sin costura en la junta, con UVs (v = arco / 8 m para material tileable).
+- **`TrackConfig.cs`** — lee `?seed=` y `?laps=` de `Application.absoluteURL` con
+  fallback serializado (parseo con `InvariantCulture`).
+- **`TrackBuilder.cs`** — MonoBehaviour: en `Awake` resuelve seed, genera, asigna la mesh
+  a `MeshFilter`/`MeshCollider`, dibuja centerline + línea de meta como gizmos, y expone
+  `Data` (centerline, longitud, radio mínimo, pose de meta) para las fases siguientes.
+
+### Verificación (Unity batchmode local, editor 6000.3.22f1)
+
+- **`unity/Assets/Editor/Fase1TrackValidator.cs`** — barrido `-executeMethod` sobre seeds
+  1..200. Resultado: **PASS, 200/200, 0 fallos**. Sólo **1/200 seeds** (la 117) necesita
+  una seed derivada; longitudes 1898–2500 m; curva más cerrada del barrido 13.3 m.
+- **`unity/Assets/Tests/EditMode/TrackGeneratorTests.cs`** (asmdef
+  `AgenticRacing.Tests.EditMode`, NUnit) — **7/7 tests pasan**: determinismo
+  (misma seed → vértices idénticos bit a bit), lazo cerrado + sin kink en la junta
+  (< 12°), longitud en rango, sin auto-intersección, radio mínimo navegable, seeds
+  distintas → pistas distintas, y fallback determinista (con umbral 22 m para forzarlo
+  en parte del barrido, verifica que la cadena de seeds derivadas es reproducible y que
+  el resultado sigue siendo válido).
+
+### Bug encontrado y corregido durante la iteración
+
+Primera pasada del validador: **181/200 seeds necesitaban seed derivada**, todas por
+"radio de curva < 15 m", y el `tightest corner overall` quedaba clavado en 15.0 m exacto
+(el loop de fallback forzaba hasta rozar el umbral). Causa: la curvatura de Menger se
+medía entre puntos **adyacentes a 2 m** de una centerline que es interpolación lineal de
+un spline muestreado grueso (`SamplesPerSegment = 24` ≈ 7.5 m entre puntos finos), así
+que cada "codo" de la discretización se leía como una horquilla de ~8 m. Fixes:
+`SamplesPerSegment` 24 → 160 (spline fino < 1 m), y medir la curvatura sobre un **stencil
+de ~6 m** (`CurvatureStencil`), no entre vecinos. Además se bajó el jitter
+(radial ±35/45 % → −25/+30 %, angular 0.55 → 0.45) y el umbral de curva a 12 m. Resultado:
+de 181/200 fallbacks a 1/200. También se cambió el `Debug.LogWarning` por-reintento (588
+warnings con stack trace, log de 17k líneas) por un único `Debug.Log` resumido.
+
+### Pendiente de esta iteración (no bloquea, es housekeeping)
+
+- El validador y los tests corren **localmente**; falta que corran en CI. Se abre un PR
+  **draft** de Fase 1 para que el workflow (`pull_request → main`) valide cada push; el
+  job de tests EditMode en CI se añade en la iteración 2 (ahora CI sólo compila WebGL +
+  imagen, que ya cubre que el código de `Track/` compila para WebGL).
+- `unity/ProjectSettings/ProjectSettings.asset` fue tocado por el Editor durante los runs
+  (swap de un define symbol de WebGL, `SENTIS_ANALYTICS_ENABLED` → `APP_UI_EDITOR_ONLY`,
+  sin relación con este trabajo) — revertido para no meter churn en el PR. Si reaparece de
+  forma persistente, tratarlo aparte.
+
+### Retomar aquí — Fase 1, iteración 2
+
+1. Numeración de curvas: detectar sectores de curvatura significativa sobre la centerline
+   y asignar índices estables y deterministas (curva 1, 2, 3…). Exponerlos en `TrackData`.
+2. Racing line (trazada ideal) calculada y expuesta como referencia.
+3. Añadir un job de tests EditMode al workflow de CI.
+4. Escena de demo mínima (`TrackBuilder` + cámara cenital) para inspección visual y para
+   que el humano confirme el trazado.
