@@ -42,7 +42,12 @@ namespace AgenticRacing.Agents
             body.name = "AgentCar";
             body.transform.SetParent(transform, false);
             body.transform.localScale = new Vector3(2.0f, 0.8f, 4.2f);
-            // Keep the BoxCollider: the agent needs to bounce off the edge walls.
+            // Keep the BoxCollider (the car bounces off the edge walls), but put
+            // the car on "Ignore Raycast" so the ray sensor, whose origin sits
+            // inside this box, doesn't hit the car's own collider. Physical
+            // collision with the walls still works — that's the collision matrix,
+            // not raycasts.
+            body.layer = 2; // Ignore Raycast
 
             var rb = body.AddComponent<Rigidbody>();
             var car = body.AddComponent<CarController>();

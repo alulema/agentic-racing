@@ -9,9 +9,10 @@ using UnityEngine;
 namespace AgenticRacing.EditorTools
 {
     /// <summary>
-    /// Headless Linux build of the ML-Agents training scene, for the Azure spot
-    /// VM (CLAUDE.md §2.3: "construye un player headless de Linux ... y corre
-    /// mlagents-learn --env=&lt;build&gt;"). Not the demo pipeline.
+    /// Linux player build of the ML-Agents training scene, for the Azure spot VM
+    /// (CLAUDE.md §2.3). It is a normal StandaloneLinux64 player (only "Linux
+    /// Build Support (IL2CPP)" is required, §9 — NOT the Dedicated Server module)
+    /// that the VM runs headless: `mlagents-learn --env=... --no-graphics`.
     ///
     ///   -batchmode -nographics -quit -executeMethod \
     ///     AgenticRacing.EditorTools.Fase2TrainingBuild.Build
@@ -30,36 +31,28 @@ namespace AgenticRacing.EditorTools
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
 
-            var prevSubtarget = EditorUserBuildSettings.standaloneBuildSubtarget;
-            try
+            // Force the plain Player subtarget: a stale "Server" value persists in
+            // EditorUserBuildSettings and needs the Dedicated Server module.
+            EditorUserBuildSettings.standaloneBuildSubtarget = StandaloneBuildSubtarget.Player;
+
+            if (Directory.Exists(OutputDir)) Directory.Delete(OutputDir, true);
+            Directory.CreateDirectory(OutputDir);
+
+            var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
             {
-                // Server subtarget = a true headless player (no graphics module),
-                // which is what the CPU-only VM wants.
-                EditorUserBuildSettings.standaloneBuildSubtarget = StandaloneBuildSubtarget.Server;
+                scenes = new[] { ScenePath },
+                locationPathName = Path.Combine(OutputDir, OutputName),
+                target = BuildTarget.StandaloneLinux64,
+                subtarget = (int)StandaloneBuildSubtarget.Player,
+                options = BuildOptions.None,
+            });
 
-                if (Directory.Exists(OutputDir)) Directory.Delete(OutputDir, true);
-                Directory.CreateDirectory(OutputDir);
+            var s = report.summary;
+            Debug.Log($"[Fase2TrainingBuild] result={s.result} errors={s.totalErrors} " +
+                      $"size={s.totalSize} -> {OutputDir}/{OutputName}");
 
-                var report = BuildPipeline.BuildPlayer(new BuildPlayerOptions
-                {
-                    scenes = new[] { ScenePath },
-                    locationPathName = Path.Combine(OutputDir, OutputName),
-                    target = BuildTarget.StandaloneLinux64,
-                    subtarget = (int)StandaloneBuildSubtarget.Server,
-                    options = BuildOptions.None,
-                });
-
-                var s = report.summary;
-                Debug.Log($"[Fase2TrainingBuild] result={s.result} errors={s.totalErrors} " +
-                          $"size={s.totalSize} -> {OutputDir}/{OutputName}");
-
-                if (Application.isBatchMode)
-                    EditorApplication.Exit(s.result == BuildResult.Succeeded ? 0 : 1);
-            }
-            finally
-            {
-                EditorUserBuildSettings.standaloneBuildSubtarget = prevSubtarget;
-            }
+            if (Application.isBatchMode)
+                EditorApplication.Exit(s.result == BuildResult.Succeeded ? 0 : 1);
         }
     }
 }

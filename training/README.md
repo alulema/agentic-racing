@@ -34,10 +34,12 @@ En una máquina con el Editor:
   -projectPath unity \
   -executeMethod AgenticRacing.EditorTools.Fase2TrainingBuild.Build \
   -logFile -
-# -> unity/Builds/train-linux/train.x86_64  (subtarget Server = headless real)
+# -> unity/Builds/train-linux/train.x86_64  (player Linux normal)
 ```
 
-Sube `unity/Builds/train-linux/` entero a la VM. `chmod +x train.x86_64`.
+Sube `unity/Builds/train-linux/` entero a la VM. `chmod +x train.x86_64`. Es un
+player normal; se corre headless con `--no-graphics` (ver abajo). No hace falta
+el módulo "Dedicated Server", sólo "Linux Build Support (IL2CPP)" (§9).
 
 La escena que construye es una rejilla de `TrainingArena` (por defecto 9), cada
 una con una seed de circuito distinta (`baseSeed + índice`), separadas 4 km para
