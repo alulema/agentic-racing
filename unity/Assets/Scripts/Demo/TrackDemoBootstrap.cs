@@ -73,9 +73,11 @@ namespace AgenticRacing.Demo
                 $"seed {_track.EffectiveSeed}   {_track.Corners.Count} corners   arrows / WASD", small);
             if (_carController != null)
             {
-                GUI.Label(new Rect(16, 62, 620, 24),
+                GUI.Label(new Rect(16, 62, 700, 24),
                     $"speed {_carController.ForwardSpeed:F1} m/s   {_carController.InputDebug}", small);
             }
+            GUI.Label(new Rect(16, 82, 700, 24),
+                $"progress {_lapTracker.Progress01:P0}   {_lapTracker.DetectorDebug}", small);
         }
 
         // --- builders --------------------------------------------------------

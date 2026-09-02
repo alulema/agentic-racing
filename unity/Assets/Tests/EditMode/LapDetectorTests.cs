@@ -74,7 +74,7 @@ namespace AgenticRacing.Tests
         }
 
         [Test]
-        public void LapTracker_RaisesFinishedOnTargetLap()
+        public void LapTracker_CountsLapsByDrivingTheCenterline()
         {
             TrackData track = TrackGenerator.Generate(4242);
             var go = new GameObject("lt");
@@ -82,6 +82,7 @@ namespace AgenticRacing.Tests
             try
             {
                 var lt = go.AddComponent<LapTracker>();
+                carGo.transform.position = track.Centerline[0];
                 lt.Initialise(track, carGo.transform, laps: 3);
 
                 int lapEvents = 0;
@@ -89,24 +90,61 @@ namespace AgenticRacing.Tests
                 lt.LapCompleted += _ => lapEvents++;
                 lt.RaceFinished += () => finished = true;
 
-                // Drive the car transform straight through the line three times.
-                Vector3 s = track.StartPosition;
-                Vector3 dir = track.StartDirection;
-                for (int i = 0; i < 3; i++)
+                var center = track.Centerline;
+                // Drive around the centerline three and a bit times. Step by a few
+                // samples per Tick, like a moving car.
+                for (int lap = 0; lap < 3; lap++)
                 {
-                    carGo.transform.position = s - dir * 6f;
-                    lt.Tick();
-                    carGo.transform.position = s + dir * 2f;
-                    lt.Tick();
-                    carGo.transform.position = s + dir * 25f;
-                    lt.Tick();
-                    carGo.transform.position = s - dir * 25f;
+                    for (int i = 0; i < center.Count; i += 3)
+                    {
+                        carGo.transform.position = center[i];
+                        lt.Tick();
+                    }
+                }
+                // A little past the line to close the third lap's wrap.
+                for (int i = 0; i < 30; i += 3)
+                {
+                    carGo.transform.position = center[i];
                     lt.Tick();
                 }
 
-                Assert.AreEqual(3, lapEvents, "one LapCompleted per loop");
+                Assert.AreEqual(3, lapEvents, "one LapCompleted per loop of the centerline");
+                Assert.AreEqual(3, lt.LapsCompleted);
                 Assert.IsTrue(finished, "RaceFinished after the target lap");
                 Assert.IsTrue(lt.Finished);
+            }
+            finally
+            {
+                Object.DestroyImmediate(go);
+                Object.DestroyImmediate(carGo);
+            }
+        }
+
+        [Test]
+        public void LapTracker_DoesNotCountWithoutGoingMostOfTheWayRound()
+        {
+            TrackData track = TrackGenerator.Generate(99);
+            var go = new GameObject("lt");
+            var carGo = new GameObject("car");
+            try
+            {
+                var lt = go.AddComponent<LapTracker>();
+                carGo.transform.position = track.Centerline[0];
+                lt.Initialise(track, carGo.transform, laps: 3);
+
+                int lapEvents = 0;
+                lt.LapCompleted += _ => lapEvents++;
+
+                var center = track.Centerline;
+                int quarter = center.Count / 4;
+                // Nudge forward a quarter lap and back to the line a few times.
+                for (int rep = 0; rep < 4; rep++)
+                {
+                    for (int i = 0; i <= quarter; i += 3) { carGo.transform.position = center[i]; lt.Tick(); }
+                    for (int i = quarter; i >= 0; i -= 3) { carGo.transform.position = center[i]; lt.Tick(); }
+                }
+
+                Assert.AreEqual(0, lapEvents, "quarter-lap shuffles must not count as laps");
             }
             finally
             {

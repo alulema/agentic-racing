@@ -29,6 +29,11 @@ namespace AgenticRacing.Vehicle
         /// <summary>1 while on the first lap, 2 on the second, ...</summary>
         public int CurrentLap => LapsCompleted + 1;
 
+        // Last-tick values, for an on-screen debug readout.
+        public float LastAhead { get; private set; }
+        public float LastLateral { get; private set; }
+        public bool Armed => _armed;
+
         public LapDetector(Vector3 startPos, Vector3 startDir, float triggerRadius, float rearmDistance = 8f)
         {
             _startPos = startPos;
@@ -66,6 +71,8 @@ namespace AgenticRacing.Vehicle
 
             _prevAhead = ahead;
             _hasPrev = true;
+            LastAhead = ahead;
+            LastLateral = lateral;
             return lap;
         }
     }
