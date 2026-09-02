@@ -52,8 +52,13 @@ namespace AgenticRacing.Vehicle
             _rb.angularDamping = config.AngularDrag;
             _rb.interpolation = RigidbodyInterpolation.Interpolate;
             _rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
-            // Keep the car upright; it drives on a flat plane (CLAUDE.md Fase 1).
-            _rb.constraints = RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ;
+            _rb.useGravity = false;
+            // Fase 1 track is a flat ribbon at Y = 0 with no ground plane, so pin
+            // the car to that plane (no falling through the mesh collider) and
+            // keep it upright. Fase 3 can relax this if elevation is added.
+            _rb.constraints = RigidbodyConstraints.FreezeRotationX
+                              | RigidbodyConstraints.FreezeRotationZ
+                              | RigidbodyConstraints.FreezePositionY;
         }
 
         private void FixedUpdate()
@@ -67,8 +72,6 @@ namespace AgenticRacing.Vehicle
             ApplyDrive(fwd, vFwd);
             ApplySteering(vFwd, dt);
             ApplyLateralGrip(fwd);
-
-            _rb.AddForce(Vector3.down * config.Downforce);
         }
 
         private void PollKeyboard()
@@ -105,7 +108,9 @@ namespace AgenticRacing.Vehicle
             if (t < 0f && ForwardSpeed > 0.5f) { Brake = 1f; Throttle = 0f; }
             else { Brake = brakeKey ? 1f : 0f; Throttle = t; }
 
-            InputDebug = $"src={src}  thr={Throttle:F1}  brk={Brake:F1}  str={Steer:F1}";
+            Vector3 v = _rb.linearVelocity;
+            InputDebug = $"src={src}  thr={Throttle:F1}  str={Steer:F1}  " +
+                         $"|v|={v.magnitude:F1}  vy={v.y:F1}  kin={_rb.isKinematic}";
         }
 
         private void ApplyDrive(Vector3 fwd, float vFwd)

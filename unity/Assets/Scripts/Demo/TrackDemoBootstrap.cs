@@ -193,15 +193,21 @@ namespace AgenticRacing.Demo
             body.transform.localScale = new Vector3(2.0f, 0.8f, 4.2f);
             Tint(body, new Color(0.95f, 0.78f, 0.15f));
 
+            // No collider in Fase 1: one car, no walls or car-to-car contact yet,
+            // and the frozen-Y car would otherwise jam against the track mesh.
+            var boxCol = body.GetComponent<Collider>();
+            if (boxCol != null) Destroy(boxCol);
+
             var rb = body.AddComponent<Rigidbody>();
-            rb.centerOfMass = new Vector3(0f, -0.4f, 0f);
 
             var controller = body.AddComponent<CarController>();
             _carController = controller;
             _car = body.transform;
 
             // Spawn just ahead of the line so the first crossing is a real lap.
-            Vector3 spawn = track.StartPosition + Vector3.up * 0.6f + track.StartDirection * 2f;
+            // Sit on the track surface (half the 0.8 m-tall body), just ahead of
+            // the line so the first crossing is a genuine lap.
+            Vector3 spawn = track.StartPosition + Vector3.up * 0.4f + track.StartDirection * 2f;
             controller.PlaceAt(spawn, track.StartDirection);
         }
 
