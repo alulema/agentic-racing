@@ -1,0 +1,17 @@
+# Dev-only image for `compose.yaml`: the FastAPI app WITHOUT Ollama or the baked
+# model. In dev, Ollama runs as its own compose service (official image + a
+# volume for the weights) so the app image stays small and rebuilds are fast.
+# The production image is docker/Dockerfile (single image, model baked in).
+FROM python:3.13-slim
+
+WORKDIR /app
+
+COPY server/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY server/ .
+
+ENV STATIC_DIR=/app/static
+EXPOSE 8080
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]

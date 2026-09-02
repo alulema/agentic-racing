@@ -1,0 +1,53 @@
+# Local dev / Fase 0 smoke test for the agentic layer (CLAUDE.md section 2.5).
+#
+#   docker compose up --build
+#   curl -s localhost:8080/api/strategy | jq
+#
+# This mirrors the PRODUCTION topology (FastAPI proxy + local Ollama) without
+# baking the 2 GB model into an image on every change: here Ollama is its own
+# service with a named volume, and `ollama-init` pulls the model once into it.
+# The shippable single image is docker/Dockerfile.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    # Not published to the host: only the app service talks to it.
+    expose:
+      - "11434"
+
+  # One-shot: pull llama3.2:3b into the shared volume, then exit. Idempotent —
+  # a fast no-op once the weights are already there.
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_HOST: "ollama:11434"
+    entrypoint: ["sh", "-c", "until ollama ps >/dev/null 2>&1; do sleep 1; done; ollama pull llama3.2:3b"]
+    restart: "no"
+    volumes:
+      - ollama-models:/root/.ollama
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    environment:
+      OLLAMA_URL: "http://ollama:11434"
+      OLLAMA_MODEL: "llama3.2:3b"
+      PROJECT_ID: "agentic-racing"
+      DEMO_SLOT: "demo01"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ollama
+    volumes:
+      # Live-edit the server code; --reload picks it up.
+      - ./server:/app
+      # Optional: drop an assembled Unity Web build here to also test static serving.
+      - ./web:/app/static
+
+volumes:
+  ollama-models:

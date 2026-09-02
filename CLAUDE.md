@@ -38,8 +38,8 @@ Estas decisiones están cerradas. Si encuentras un bloqueo técnico real contra 
 | Pilotos | **Políticas distintas y emparejadas en ritmo**, física idéntica | Autos justos con estilos de conducción distintos. Ver Fase 3: la selección de snapshots tiene un criterio específico, no vale tomar checkpoints espaciados. |
 | Inferencia RL | **En el cliente**, vía Inference Engine / Sentis (`com.unity.ai.inference`) | El contenedor no necesita GPU, Python ni PyTorch en runtime. Es el mayor ahorro de presupuesto del proyecto. |
 | Entrenamiento | **Offline, en VM cloud**; nunca en el contenedor del demo | Costo de cómputo cero en producción. Solo el `.onnx` se hornea en la imagen. Ver sección 2.3. |
-| LLM | `claude-haiku-4-5`, **todo en vivo** con guardrails | ~$0.20/sesión optimizada. Barato, rápido, suficiente para decisiones tácticas. |
-| Llamadas al LLM | **Por evento**, no por intervalo fijo | Reduce llamadas ~3x sin perder calidad de demo. |
+| LLM | **`llama3.2:3b` local, servido por un sidecar Ollama** (CPU-only), horneado en la imagen | Decisión revisada 2026-08-31 (antes: `claude-haiku-4-5` hosted). Sin API de LLM externa: sin factura por token, sin dependencia de Anthropic. El contrato lo permite y su demo de referencia usa el mismo patrón. Coste: latencia ~5–15 s/respuesta en CPU e imagen +~2 GB. Ver sección 2.5. |
+| Llamadas al LLM | **Por evento**, no por intervalo fijo; cooldown por auto para no saturar la CPU del sidecar | Reduce llamadas ~3x sin perder calidad de demo, y evita encolar 6 estrategas contra un Ollama CPU-only. |
 | Backend | **FastAPI (Python 3.13)** | Sirve estáticos + proxy al LLM. **NO ASP.NET Core**: el contrato de integración prohíbe tecnología Microsoft en el stack interno. Ver sección 2.2. |
 | UI de HUD y radio | **Overlay DOM fuera del canvas**, no Unity UI | La UI dentro del canvas de Unity no puede usar las variables CSS del tema del sitio. Ver sección 2.2. |
 | Repo | **Público** | Minutos de GitHub Actions gratis, y permite que este agente cierre el loop de build/verify solo. El contrato también exige imagen pública. |
@@ -81,14 +81,15 @@ sus reglas ganan sobre cualquier preferencia técnica. Lo que más impacta el di
   backend es FastAPI y no ASP.NET Core, y el registry es GHCR y no ACR. Unity sí pasa:
   es motor de terceros, IL2CPP compila a WebAssembly, y no queda runtime .NET en el
   contenedor — este solo sirve estáticos y hace de proxy.
-- **Imagen pública en GHCR.** Solo datos públicos horneados. Los modelos `.onnx` son datos
-  públicos, no hay problema. La API key llega por env en runtime, nunca en la imagen.
+- **Imagen pública en GHCR.** Solo datos públicos horneados. Los modelos `.onnx` y los
+  pesos de `llama3.2:3b` (open-weights) son datos públicos, no hay problema —
+  se hornean en la imagen. No hay ninguna API key que inyectar (ver sección 2.5).
 - **Sin TLS y sin auth en la app.** El gateway termina TLS y valida el JWT antes de
   enrutar. Confía en todo request que llegue. No implementes login.
 - **Sirve desde la raíz `/`**, puerto fijo `8080`, ingress interno. El build de WebGL debe
   usar rutas relativas — verifica esto en Fase 0, es un fallo clásico.
-- **Env vars que recibes**: `PROJECT_ID`, `DEMO_SLOT`, y los secretos declarados
-  (`ANTHROPIC_API_KEY`).
+- **Env vars que recibes**: `PROJECT_ID`, `DEMO_SLOT`. **No se declara ningún secreto** —
+  el LLM es local (sección 2.5), así que no hay `ANTHROPIC_API_KEY` ni equivalente.
 - **Stateless.** El servidor no guarda nada. Los logs de carrera (que la Fase 6.1 necesita)
   viven en memoria del cliente. Esto permite declarar `shareable: true` en el hand-off, lo
   que ahorra provisión — no lo tires por guardar historial en el servidor.
@@ -140,6 +141,35 @@ carrera para llenar el tiempo. Una sesión típica es intro/selección de seed +
 carreras, o directamente el modo de campo mixto de la Fase 6.3, que son varias carreras
 por diseño.
 
+### 2.5 — LLM local, no API hosted (decisión revisada 2026-08-31)
+
+La tabla de la sección 2 decía originalmente `claude-haiku-4-5` hosted, todo en vivo. Se
+cambió a un **modelo local `llama3.2:3b` servido por un sidecar Ollama**, por
+decisión del dueño del proyecto: no querer usar ni depender de modelos de Anthropic. El
+contrato de integración lo permite explícitamente (`DEMO_INTEGRATION.md` punto 6 nombra
+Claude solo como *ejemplo* de opción aceptable, y su demo de referencia `rag-blogposts`
+es autohospedado con Ollama). Esta decisión de la sección 2 queda cerrada en su nueva
+forma: no re-litigar hacia una API hosted sin hablarlo.
+
+**Qué cambia respecto al diseño original:**
+
+- **Modelo**: `llama3.2:3b` (open-weights, ~2 GB en q4). Elegido para caber en el
+  pod efímero CPU-only (2 vCPU / 4 GiB) con margen para los hasta 6 estrategas por auto.
+- **Empaquetado**: los pesos van **horneados en la imagen** (no `ollama pull` al arrancar),
+  para arranque determinista y sin red. Coste: la imagen sube ~2 GB y la infra la jala
+  fresca en cada provisión — es el mayor golpe al riesgo de "peso de imagen" (§11).
+- **Sin secretos**: no hay `ANTHROPIC_API_KEY` ni equivalente. La sección 2.2 y el
+  hand-off manifest de la Fase 5 no declaran ningún secreto.
+- **Coste**: desaparece la factura por token, y con ella el riesgo #1 del proyecto
+  ("tráfico no acotado" contra una API medida, §7). El riesgo se reconvierte en
+  **saturación de CPU y latencia**: 6 estrategas encolados contra un Ollama CPU-only.
+  Los guardrails de §7 se reinterpretan en esa clave (ver §7 y §6.7).
+- **Latencia**: ~5–15 s por respuesta en CPU. Aceptable porque la carrera nunca espera al
+  LLM (§6.6) y el disparo es por evento con cooldown, pero el radio irá algo más desfasado
+  de lo que pasa en pista que con un modelo hosted rápido.
+- **Contrato**: el demo pasa de "sin recursos extra" a declarar el sidecar Ollama en el
+  hand-off manifest (§5, Fase 5).
+
 ---
 
 ## 3. Stack
@@ -163,7 +193,10 @@ por diseño.
 > depende de este paquete internamente, así que verifica que no haya conflicto de versión.
 
 **Capa agentic**
-- API de Anthropic (`claude-haiku-4-5`) vía proxy propio
+- Modelo local **`llama3.2:3b`** servido por un **sidecar Ollama** (CPU-only),
+  con los pesos horneados en la imagen. Sin API de LLM externa. Ver sección 2.5.
+- FastAPI hace de proxy: recibe la telemetría en `/api/strategy`, llama a Ollama
+  (`/api/chat` con salida JSON forzada) y valida la respuesta contra el esquema de 6.4.
 - Llamadas desde el overlay DOM (JS) o desde C# vía interop, hacia `/api/strategy`
 
 **UI**
@@ -176,7 +209,10 @@ por diseño.
 **Servidor / despliegue**
 - **FastAPI (Python 3.13)**, uvicorn en `0.0.0.0:8080`
 - Sirve el build de WebGL como estáticos + `/api/strategy` + `/api/health` + `/api/ping`
-- Docker single-stage sobre `python:3.13-slim`, con el build de WebGL copiado
+- **Sidecar Ollama** en la misma imagen/red, escuchando en `127.0.0.1:11434`, con
+  `llama3.2:3b` horneado. Un supervisor arranca `ollama serve` y `uvicorn`.
+- Docker sobre `python:3.13-slim` + binario de Ollama; el build de WebGL y los pesos del
+  modelo copiados en la imagen. La imagen sube ~2 GB por el modelo — vigilar en Fase 5.
 - **GHCR público** → la infra efímera lo jala sin credenciales
 
 > ⚠️ **Headers de Unity WebGL**: los builds sirven archivos comprimidos (`.br` / `.gz`) que
@@ -201,8 +237,10 @@ por diseño.
 /web/             Shell HTML + overlay DOM (HUD, radio, DEMO_INFO)
 /training/        Configs YAML de ML-Agents, scripts, build headless Linux, results/
 /models/          .onnx entrenados, versionados con el commit que los produjo
-/server/          FastAPI: estáticos + /api/strategy + /api/health + /api/ping
-/docker/          Dockerfile
+/server/          FastAPI: estáticos + /api/strategy (proxy a Ollama) + /api/health + /api/ping
+/docker/          Dockerfile (imagen final: app + sidecar Ollama, modelo horneado),
+                  Dockerfile.dev (solo app, para compose), entrypoint.sh (supervisor)
+/compose.yaml     Dev local: app + Ollama como servicios separados (modelo en volumen)
 /.github/workflows/  Build Unity WebGL, build imagen, push a GHCR
 DEMO_INTEGRATION.md  Contrato de la infra efímera — LÉELO, no lo modifiques
 CLAUDE.md
@@ -221,23 +259,41 @@ aceptación de la actual pasen. Cada fase termina en un PR.
 
 No empieces por el juego. Valida primero lo que puede matar el proyecto.
 
-- [ ] Leer `DEMO_INTEGRATION.md` completo antes de escribir nada
-- [ ] Proyecto Unity vacío exporta a WebGL, con **rutas relativas**, y corre en browser
-      servido desde la raíz `/`
-- [ ] FastAPI sirve ese build con los **headers correctos para archivos `.br`/`.gz`** de
-      Unity, en `0.0.0.0:8080`
-- [ ] La imagen se publica a **GHCR como paquete público** desde CI
-- [ ] `docker run -p 8080:8080 -e PROJECT_ID=agentic-racing -e DEMO_SLOT=demo01` funciona
+- [x] Leer `DEMO_INTEGRATION.md` completo antes de escribir nada
+- [x] Proyecto Unity vacío exporta a WebGL, con **rutas relativas**, y corre en browser
+      servido desde la raíz `/` — validado en navegador real 2026-08-31
+- [x] FastAPI sirve ese build con los **headers correctos para archivos `.br`/`.gz`** de
+      Unity, en `0.0.0.0:8080` — `Content-Encoding` + `Content-Type` verificados por `curl`
+      y en navegador
+- [~] La imagen se publica a **GHCR como paquete público** desde CI — CI verde en el PR de
+      Fase 0 (run 2 de #1, 2026-09-02): GameCI activa la licencia Personal, compila WebGL
+      6000.3.22f1, y arma la imagen. Falta solo lo humano-only post-merge: mergear #1 →
+      primer `push:main` publica a GHCR → marcar el paquete **Público**. Ver `docs/Devlog.md`
+- [x] `docker run -p 8080:8080 -e PROJECT_ID=agentic-racing -e DEMO_SLOT=demo01` funciona
       localmente — es la prueba que el contrato define como suficiente
-- [ ] Un modelo ONNX de juguete (red densa trivial, 3 inputs → 2 outputs) carga con
-      `com.unity.ai.inference` y ejecuta inferencia **dentro del build WebGL**
-- [ ] Queda documentado qué `BackendType` funciona en WebGL y cuál es el costo por
-      inferencia, extrapolado a 6 autos simultáneos
-- [ ] **Interop DOM ↔ Unity funcionando en ambas direcciones**: un botón HTML fuera del
+- [x] Un modelo ONNX de juguete (red densa trivial, 3 inputs → 2 outputs) carga con
+      `com.unity.ai.inference` y ejecuta inferencia **dentro del build WebGL** — `onnx_ok`,
+      salida `[2.600, 3.400]` correcta, en navegador real 2026-08-31
+- [x] Queda documentado qué `BackendType` funciona en WebGL y cuál es el costo por
+      inferencia, extrapolado a 6 autos simultáneos — `BackendType.CPU`; 3.40 ms en frío
+      (crea `Worker` + warmup), 0.10 ms en caliente; ~0.6 ms/frame para 6 autos en caliente.
+      Modelo de juguete 3→2: es un piso, el MLP real de Fase 2 será mayor. Ver `docs/Devlog.md`
+- [x] **Interop DOM ↔ Unity funcionando en ambas direcciones**: un botón HTML fuera del
       canvas cambia algo en la escena, y un evento de la escena actualiza un elemento DOM.
-      Todo el HUD depende de esto.
-- [ ] El overlay DOM enlaza `demo-theme.css` y usa sus variables CSS
-- [ ] Una llamada al LLM vía `/api/strategy` devuelve JSON válido, con la key leída de env
+      Todo el HUD depende de esto. — ambas direcciones validadas en navegador 2026-08-31
+- [x] El overlay DOM enlaza `demo-theme.css` y usa sus variables CSS (con fallback si no carga)
+- [x] Una llamada al LLM vía `/api/strategy` devuelve JSON válido contra el esquema,
+      resuelta por el **sidecar Ollama con `llama3.2:3b`** (sin API externa, sin
+      secretos) — validado 2026-09-01 en las **dos** topologías:
+      `docker compose up` (app + Ollama como servicios separados, modelo en volumen) →
+      `HTTP 200`, JSON válido, 6.8 s en frío / 2.4 s caliente; e **imagen final**
+      (`docker build -f docker/Dockerfile` con el modelo horneado + `entrypoint.sh`
+      supervisando `ollama serve` + `uvicorn`) → `docker run` arranca, `/api/strategy`
+      `HTTP 200` con JSON válido (~3.7 s), sirve estáticos desde `/`, Ollama escucha
+      solo en loopback. Bug encontrado y corregido: el Dockerfile no instalaba `zstd`,
+      que el instalador de Ollama ahora exige. Hallazgo de peso: la imagen final pesa
+      **~8.3 GB** (runtime de Ollama con libs GPU ~2.25 GB + modelo ~2.0 GB), no los
+      "~2 GB extra" que asumen §2.5/§3/§11 — a optimizar en Fase 5. Ver `docs/Devlog.md`.
 
 **Criterio de aceptación**: todo lo anterior funciona en el entorno de despliegue real, no
 solo en el editor. Si la inferencia con Inference Engine falla en WebGL, toda la
@@ -340,9 +396,12 @@ checklist de cierre.**
 
 - [ ] Cada auto tiene su propio jefe de equipo LLM **independiente**. No un cerebro
       central: si todos comparten estratega no hay competencia real de tácticas.
-- [ ] Disparo por evento con cooldown y coalescing (6.6). La carrera **nunca espera** al LLM
-- [ ] Prefijo cacheado + sufijo variable (6.7)
-- [ ] Payload de telemetría y respuesta validada contra esquema (6.3, 6.4, 6.8)
+- [ ] Disparo por evento con cooldown y coalescing (6.6), más límite global de llamadas
+      concurrentes a Ollama (§7). La carrera **nunca espera** al LLM
+- [ ] Prefijo estable + sufijo variable (6.7); modelo caliente con `keep_alive` largo
+- [ ] Salida JSON forzada en la llamada a Ollama (`format` / grammar) y respuesta validada
+      contra el esquema (6.3, 6.4, 6.8); medir la tasa de respuestas descartadas — con un
+      modelo 3B es más alta que con uno hosted, y es dato para el post técnico
 - [ ] Mapeo directiva → controlador en un único ScriptableObject (6.5), escribiendo sobre
       los canales de observación que ya existen desde Fase 2
 - [ ] Bitácora lap-over-lap alimentando el campo `notes`
@@ -352,30 +411,35 @@ checklist de cierre.**
 - [ ] **Heartbeat**: ping a `/api/ping` mientras haya carrera activa, con periodo cómodo
       bajo el umbral de inactividad de ~8 min. Sin esto la infra destruye el entorno a
       mitad de carrera cuando el LLM está en cooldown, y parece un bug aleatorio.
-- [ ] Fallback: si el LLM falla, expira o se agota la cuota, el auto usa una directiva
-      heurística por defecto y el demo sigue corriendo. **Nunca** debe romperse la carrera
-      por un problema del LLM.
+- [ ] Fallback: si Ollama falla, expira, o el cortacircuitos de carga (§7) se dispara, el
+      auto usa una directiva heurística por defecto y el demo sigue corriendo. **Nunca**
+      debe romperse la carrera por un problema del LLM.
 - [ ] Manejo elegante del cierre abrupto de conexión (el gateway corta al expirar sesión)
 
 **Criterio de aceptación**: una carrera de 20 minutos completa sin errores, con el panel
 de radio mostrando razonamiento coherente con lo que pasa en pista.
 
-### Fase 5 — Empaquetado y control de costo
+### Fase 5 — Empaquetado y control de carga
 
 - [ ] Optimización del build WebGL: code stripping, compresión Brotli, texture compression.
       Vigila el tamaño: la infra jala la imagen fresca en cada provisión y el visitante
-      descarga el build completo.
-- [ ] Guardrails de costo (ver sección 7)
+      descarga el build completo. Ojo: el modelo `llama3.2:3b` horneado ya añade ~2 GB a
+      la imagen — el margen para el resto es más estrecho que antes.
+- [ ] Guardrails de carga (ver sección 7)
+- [ ] Reparto de vCPU entre el sidecar Ollama y el proxy dentro del pod (2 vCPU / 4 GiB),
+      y `keep_alive` del modelo ajustado a la duración de sesión
 - [ ] Endpoints `/api/health` y `/api/ping`
-- [ ] Contador de tokens consumidos visible en la UI
+- [ ] Indicador en la UI del estado del LLM: latencia p95, si está en "modo offline"
+      (cortacircuitos disparado), y nº de respuestas descartadas por validación
 - [ ] **Panel "Acerca de este demo"**: rellenar `window.DEMO_INFO` con contenido propio
       (bilingüe ES/EN), incluyendo diagrama Mermaid de la arquitectura de dos niveles, los
       componentes de infra, decisiones de diseño y limitaciones honestas. El contrato trae
       el esquema y un ejemplo ilustrativo — **no lo copies, escribe el de este demo**.
 - [ ] **Hand-off manifest** para el mantenedor de la infra: `projectId` (`agentic-racing`),
       nombre legible ES/EN, URL del repo público, imagen GHCR + puerto `8080`,
-      `shareable: true` (el servidor es stateless), secreto `ANTHROPIC_API_KEY`, sin
-      recursos extra.
+      `shareable: true` (el servidor es stateless), **sin secretos** (el LLM es local),
+      y **recursos extra: sidecar Ollama en la misma imagen** con `llama3.2:3b`
+      horneado (levantado por el supervisor junto con uvicorn, escucha en `127.0.0.1:11434`).
 
 ### Fase 6 — Diferenciadores (lo que separa esto de un demo genérico de RL)
 
@@ -619,15 +683,23 @@ Eventos que disparan llamada: fin de vuelta; rival entra en rango de ataque sost
   respuesta, la respuesta puede llegar obsoleta — es aceptable y es parte de la premisa
   (el muro también reacciona tarde). No intentes "arreglarlo" pausando la simulación.
 
-### 6.7 — Prompt caching
+### 6.7 — Reutilización de contexto (KV-cache de Ollama)
 
-- **Prefijo cacheado** (idéntico en todas las llamadas de la carrera): rol de jefe de
-  equipo, reglas, esquema de salida, mapa del circuito con curvas numeradas, perfil del
-  piloto.
+Con LLM local no hay "prompt caching" facturable, pero la estructura sigue importando por
+**latencia**: Ollama mantiene el KV-cache del prompt mientras el modelo siga cargado
+(`keep_alive`) y reutiliza el prefijo común entre llamadas consecutivas del mismo
+estratega. Diséñalo igual que si fuera cache de tokens:
+
+- **Prefijo estable** (idéntico en todas las llamadas de la carrera para un auto): rol de
+  jefe de equipo, reglas, esquema de salida, mapa del circuito con curvas numeradas,
+  perfil del piloto.
 - **Sufijo variable**: el payload de 6.3.
 
 Un estratega por auto, con prefijos distintos (cada uno conoce a su piloto). El mapa del
-circuito es común, así que ponlo al inicio del prefijo para maximizar el cache hit.
+circuito es común, así que ponlo al inicio del prefijo. Mantén el modelo caliente con
+`keep_alive` largo (ej. `-1` o el largo de la sesión) para no pagar recargas. Con un solo
+Ollama CPU-only sirviendo a 6 estrategas, las llamadas se serializan: el cooldown por auto
+(§6.6) es lo que impide que la cola crezca sin control.
 
 ### 6.8 — Validación y fallo
 
@@ -644,23 +716,33 @@ Todo lo que vuelve del LLM es no confiable hasta validarse:
 
 ---
 
-## 7. Guardrails de costo — no negociables
+## 7. Guardrails de carga — no negociables
 
-El riesgo del proyecto no es el costo por sesión (~$0.20), es el tráfico no acotado.
-Implementa **todas** estas capas:
+Con LLM local no hay factura por token, así que el riesgo deja de ser el gasto y pasa a ser
+la **saturación de CPU**: 6 estrategas encolados contra un Ollama CPU-only pueden hacer que
+las respuestas lleguen minutos tarde y que el pod efímero se ahogue. Implementa **todas**
+estas capas:
 
-1. **Cuota global diaria** en el proxy. Al superarse, el sistema cae automáticamente a
+1. **Cortacircuitos global** en el proxy: si la cola de peticiones a Ollama pasa de un
+   umbral (ej. N pendientes o latencia p95 > X s), el sistema cae automáticamente a
    directivas heurísticas sin LLM y lo indica en la UI ("modo offline"). No devuelve error.
-2. **Rate limit por IP/sesión** en el proxy.
-3. **`max_tokens` acotado** en cada llamada. El output es el lado caro (5x el input).
-   El campo `radio` tiene límite de 15 palabras por diseño, no por casualidad.
-4. **Prompt caching** en el system prompt del jefe de equipo.
-5. **Cooldown mínimo** entre llamadas del mismo auto, aunque se disparen varios eventos.
-6. La API key vive **solo** en el servidor, como variable de entorno. Nunca en el cliente,
-   nunca en el repo, nunca en el build de WebGL.
+2. **Rate limit por IP/sesión** en el proxy (la simulación corre en el cliente; esto acota
+   un cliente abusivo que dispare `/api/strategy` a mano).
+3. **`num_predict` acotado** en cada llamada a Ollama (equivalente a `max_tokens`). El
+   campo `radio` tiene límite de 15 palabras por diseño, no por casualidad; `rationale` a
+   40. Un tope duro de ~150 tokens de salida mantiene la latencia bajo control.
+4. **Modelo caliente** (`keep_alive` largo) y prefijo estable por auto (§6.7) para no pagar
+   recargas ni recomputar el KV-cache del prefijo.
+5. **Cooldown mínimo** entre llamadas del mismo auto (~10–15 s, §6.6), aunque se disparen
+   varios eventos, más un **límite global de llamadas concurrentes** a Ollama (ej. 1–2):
+   es la defensa principal contra la cola.
+6. **Un solo turno de inferencia por request.** Nada de reintentos automáticos en cadena
+   contra Ollama: si la respuesta no valida (§6.8), se descarta y sigue la directiva
+   vigente — no se re-pregunta en el mismo evento.
 
-Presupuesto tope en la consola de Anthropic como red de seguridad dura — eso lo configura
-el humano, no el agente, pero recuérdaselo al cerrar la Fase 5.
+No hay presupuesto de consola que configurar (no hay API hosted). El tope real es el
+recurso del pod efímero (2 vCPU / 4 GiB): el sidecar Ollama y el proxy comparten esa CPU,
+así que el reparto de vCPU entre ambos es parte del tuning de la Fase 5.
 
 ---
 
@@ -673,7 +755,6 @@ a uno de estos puntos, **para y pide** en vez de inventar un rodeo:
 - Activar la licencia Unity (flujo `.alf` → `.ulf`) y cargarla como secret de GitHub
 - Provisionar la VM de entrenamiento y desasignarla al terminar
 - Entregar el hand-off manifest al mantenedor de la infra
-- Configurar el tope de presupuesto en la consola de Anthropic
 - **Lanzar el entrenamiento**: tú escribes la config YAML, los scripts y el `Agent` en C#,
   pero correr `mlagents-learn` requiere la VM y horas de cómputo. El humano lo lanza y te
   devuelve el `.onnx` y los logs. Las Fases 2 y 3 se leen como ejecutables de corrido y no
@@ -730,9 +811,17 @@ exactamente con la imagen de GameCI en CI.
   localmente — si ves eso, revisa el heartbeat antes que nada.
 - **Headers de Unity WebGL**: los archivos `.br`/`.gz` necesitan `Content-Encoding` y
   `Content-Type` correctos. Falla silenciosamente o con errores de carga poco descriptivos.
-- **Peso del build**: los builds de Unity WebGL son pesados y el visitante los descarga
-  completos, además de que la infra jala la imagen fresca en cada provisión. Vigila el
-  tamaño desde Fase 0; que no se convierta en sorpresa en Fase 5.
+- **Peso del build + modelo horneado**: los builds de Unity WebGL ya son pesados y el
+  visitante los descarga completos; encima el modelo `llama3.2:3b` horneado añade ~2 GB a
+  la imagen, y la infra la jala fresca en cada provisión. Vigila el tamaño desde Fase 0;
+  que no se convierta en sorpresa en Fase 5.
+
+- **Saturación del sidecar Ollama (CPU-only)**: 6 estrategas contra un solo Ollama sin GPU
+  en un pod de 2 vCPU. Si las llamadas se encolan, el radio llega tarde y el pod se ahoga.
+  Mitigación en §7 (cooldown por auto, límite de concurrencia, cortacircuitos a modo
+  offline). Si el radio se siente desconectado de la carrera, revisa la cola de Ollama
+  antes que el prompt. Un modelo 3B también descarta más respuestas por JSON inválido
+  (§6.8) que uno hosted — medir esa tasa en Fase 4.
 
 - **Inference Engine + WebGL**: no todos los operadores de PyTorch tienen equivalente 1:1
   en el runtime de inferencia. Valida con un modelo de juguete en Fase 0 antes de entrenar

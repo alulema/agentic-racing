@@ -1,0 +1,104 @@
+name: Build and publish
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+env:
+  IMAGE: ghcr.io/alulema/agentic-racing
+
+jobs:
+  build-webgl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/cache@v4
+        with:
+          path: unity/Library
+          key: Library-unity-WebGL-${{ hashFiles('unity/Assets/**', 'unity/Packages/**', 'unity/ProjectSettings/**') }}
+          restore-keys: Library-unity-WebGL-
+
+      # Requires UNITY_LICENSE (+ UNITY_EMAIL / UNITY_PASSWORD): a Personal
+      # license. Unity removed offline .alf -> .ulf activation for Personal
+      # seats, so the .ulf is generated with Unity Hub on Windows/macOS
+      # (C:\ProgramData\Unity\Unity_lic.ulf) and pasted into the secret.
+      # CLAUDE.md sección 8, humano-only. See docs/Devlog.md 2026-09-01.
+      - uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: unity
+          unityVersion: 6000.3.22f1
+          targetPlatform: WebGL
+          buildsPath: unity-build-output
+
+      # game-ci/unity-builder writes the player to
+      # ${buildsPath}/${targetPlatform}/${buildName}, and buildName defaults to
+      # the target platform too -> unity-build-output/WebGL/WebGL/{Build,
+      # TemplateData,index.html}. Upload that inner dir so the artifact root is
+      # the player itself.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webgl-build
+          path: unity-build-output/WebGL/WebGL
+          retention-days: 1
+          if-no-files-found: error
+
+  build-and-push-image:
+    needs: build-webgl
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: webgl-build
+          path: unity-build-output/WebGL
+
+      # Merge the Unity output into /web, keeping our own index.html (the
+      # DOM overlay shell) instead of Unity's auto-generated one.
+      - name: Assemble /web static root
+        run: |
+          set -euo pipefail
+          src=unity-build-output/WebGL
+          test -d "$src/Build" || { echo "::error::$src/Build missing — artifact layout changed"; ls -R "$src"; exit 1; }
+          cp -r "$src/Build" web/Build
+          cp -r "$src/TemplateData" web/TemplateData
+          if [ -d "$src/StreamingAssets" ]; then
+            cp -r "$src/StreamingAssets" web/StreamingAssets
+          fi
+
+      # On pull_request we build the image to prove docker/Dockerfile still
+      # compiles with the merged-in WebGL output, but we do NOT push: no login,
+      # push: false. The real GHCR publish only happens on push to main.
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+
+      # NOTE (humano, una sola vez): el paquete GHCR nace privado la primera
+      # vez que se publica. Hay que ir a Package Settings en GitHub y
+      # cambiar la visibilidad a Public — la infra efímera lo jala sin
+      # credenciales (contrato DEMO_INTEGRATION.md, punto 7).
