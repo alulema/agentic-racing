@@ -104,13 +104,11 @@ namespace AgenticRacing.Demo
             return m;
         }
 
+        // Replace a primitive's default material (built-in "Default-Material",
+        // which renders magenta under URP) with the reliable unlit colour.
         private static void Tint(GameObject primitive, Color c)
         {
-            var mr = primitive.GetComponent<MeshRenderer>();
-            var m = mr.material;                 // instance, not the shared default
-            if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
-            if (m.HasProperty("_Color")) m.SetColor("_Color", c);
-            m.color = c;
+            primitive.GetComponent<MeshRenderer>().sharedMaterial = UnlitColor(c);
         }
 
         private void BuildSurface(TrackData track)
