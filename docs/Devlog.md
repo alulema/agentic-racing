@@ -827,3 +827,77 @@ tests y por una prueba de conducción humana en el navegador.
 El job `build-webgl` de CI del push de la iteración 2 tardó > 50 min (vs ~11 min en Fase 0)
 — vigilar si es el runner o si el proyecto con URP + más código se volvió así de lento;
 puede necesitar caché de `Library` más agresiva o un runner más grande.
+
+---
+
+## 2026-09-02 — Fase 2 · Iteración 1: agente RL, observaciones (con canales de directiva), setup de entrenamiento
+
+Código preparado; el entrenamiento en sí lo lanza el humano en la VM (§8). Rama
+`fase-2-rl-agente`, PR #3 (draft).
+
+### Decisiones tomadas al abrir la fase (aprobadas)
+
+- **Raycasts vía `RayPerceptionSensorComponent3D`** de ML-Agents contra muros de borde
+  invisibles (`TrackEdgeColliders`), detectando por tag `TrackEdge`. No se escriben los
+  hits a mano en el vector de observación: el sensor los añade aparte.
+- **Codificación de la directiva** (§6.1) = `aggression` (1 float 0..1) + `risk_tolerance`
+  (1 float 0..1) + `directive` one-hot de 4 (`attack/defend/conserve/push`) = **6 floats**,
+  aleatorizados cada episodio con niveles discretos `{0.15, 0.5, 0.85}` para los escalares
+  (§6.4: niveles discretos, no continuo). `RaceDirective.RandomEpisode`.
+- **Reset de episodio** = spawn en un punto de arco aleatorio del circuito, con ruido de
+  rumbo (±10°) y lateral (±2 m). Un episodio = una vuelta (§2.1): termina al completar
+  `Length * 0.99` de avance, salirse, atascarse, ir al revés, o timeout (`MaxStep = 4000`).
+
+### Qué se implementó — `unity/Assets/Scripts/Agents/` (asmdef `AgenticRacing.Agents`)
+
+- **`RaceDirective`** — struct con los 3 canales + `ObservationSize = 6`, `Neutral`, y
+  `RandomEpisode(System.Random)`. Es la única superficie que el estratega de Fase 4
+  escribirá (§6.8).
+- **`RaceAgent : Agent`** — `[RequireComponent]` de `CarController` + `Rigidbody`.
+  Observación vectorial de **12 floats**: velocidad longitudinal y lateral (norm.),
+  error de rumbo vs tangente de la racing line, offset lateral del coche y de la racing
+  line respecto a centerline (clamp ±2), progreso 0..1, y los **6 canales de directiva**.
+  Acciones continuas `[steer, throttle, brake]`. Recompensa: progreso por metro
+  (`ConsumeForwardDelta`, wrap-aware), castigo por frame (empuja a ir rápido), castigo por
+  rozar/salir del borde, por atascarse, por ir al revés, bonus al cerrar la vuelta. Todos
+  los pesos serializados para tunear entre corridas sin recompilar.
+- **`TrainingArena`** — arena autocontenida: genera su circuito (seed propia), construye
+  los muros de borde, y crea un coche con `RaceAgent` + `BehaviorParameters`
+  (`RaceAgent`, obs 12, 3 acciones continuas) + `DecisionRequester` (periodo 5) + el ray
+  sensor (9 rayos, 75°, 40 m). Todo en `Awake`, sin cablear escena. El coche va a la capa
+  *Ignore Raycast* para que el sensor (origen dentro del `BoxCollider`) no se detecte a sí
+  mismo; la colisión física con los muros sigue por la matriz de colisión.
+- **`TrainingSceneBootstrap`** — rejilla de 9 arenas, seeds `1000+i`, separadas 4 km para
+  que un ray sensor no vea la arena vecina.
+
+### Build de entrenamiento — `Fase2TrainingBuild` (editor script)
+
+Construye `Assets/Scenes/TrainArena.unity` (un objeto: `TrainingSceneBootstrap`) a un
+**player `StandaloneLinux64` normal**, no un Dedicated Server. Bug encontrado: el subtarget
+`Server` necesita el módulo "Dedicated Server" que §9 no pide instalar, y el valor `Server`
+quedaba persistido en `EditorUserBuildSettings`; el script ahora fuerza
+`StandaloneBuildSubtarget.Player` explícitamente. Verificado en local: genera
+`train.x86_64` (149 MB) que la VM corre headless con `--no-graphics`.
+
+### Config PPO — `training/config/race_ppo.yaml`
+
+Behavior `RaceAgent`, `batch_size` 2048 / `buffer_size` 20480, lr 3e-4 linear, red MLP
+`hidden_units` 256 × 2 capas (§2.3: MLP pequeño), `normalize: true`, `gamma` 0.995,
+`max_steps` 20M, `checkpoint_interval` 500k (para `--resume` en spot). `training/README.md`
+tiene el procedimiento completo: construir el player, subirlo, `mlagents-learn --env=...
+--num-envs=4 --run-id=race01`, TensorBoard, y qué devolver al agente.
+
+### Verificación
+
+- Compila con ML-Agents 4.0.3 (Sentis 2.6.1, sin conflicto — §9). EditMode 20/20.
+- `Fase2TrainingBuild` produce el player Linux headless (build local, `result=Succeeded`,
+  149 MB).
+- CI de PR #3: `test-editmode` verde; `build-webgl` (confirma que el código que depende de
+  ML-Agents compila para WebGL/IL2CPP) — en curso.
+
+### Bloqueado en el humano (§8)
+
+Construir el player en máquina con licencia → subir a la VM spot → `mlagents-learn` →
+devolver `RaceAgent.onnx` + logs de TensorBoard + run-id + nº de pasos + commit. La
+iteración 2 de Fase 2 (análisis de curvas, tuneo de recompensas, validación del `.onnx` en
+WebGL) empieza cuando eso vuelva.
