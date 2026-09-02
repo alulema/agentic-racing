@@ -493,19 +493,337 @@ Con esto, **los tres puntos de riesgo que dependían de CI quedan verificados de
 reproducible**: (a) la licencia Unity Personal activa en CI, (b) el WebGL compila en CI,
 (c) la imagen Docker arma en CI con el WebGL mergeado.
 
-### Retomar aquí — lo único que queda de Fase 0 (humano-only, post-merge)
+### Cierre de Fase 0 — confirmado
 
-1. **Mergear el PR #1 a `main`.** Eso dispara el run con `push:main` → `docker login` +
-   `push: true` → primera imagen a `ghcr.io/alulema/agentic-racing`.
-2. **Marcar el paquete GHCR como Público** (*Packages → agentic-racing → Package settings
-   → Change visibility → Public*). La infra efímera lo jala sin credenciales (contrato
-   punto 7).
+- PR #1 **mergeado** a `main` (merge commit `f88c830`, 2026-09-02 13:01 UTC).
+- Run de CI con `push:main` (`33633279640`) ✅: compiló WebGL, `docker login` a GHCR y
+  `push: true`.
+- **Imagen pública en GHCR** verificada con token anónimo de `ghcr.io` (sin credenciales):
+  `manifests/latest` → `HTTP 200`, `tags/list` → `latest` + `<sha>`, ambos tags al mismo
+  digest `sha256:a17ec970…`. Manifest single-platform `linux/amd64` (sin índice
+  multi-arch). **Tamaño en registry: ~3.49 GiB comprimido / 14 capas** — los ~8.3 GB de
+  antes eran sin comprimir; lo que la infra descarga por provisión es la mitad.
 
-**Estado de Fase 0**: todo lo verificable por el agente está hecho y verde en CI. Solo
-resta merge + push inicial a GHCR + visibilidad pública, que es humano-only.
+Todos los criterios de aceptación de Fase 0 (§5) pasan.
 
 **Para Fase 5 (anotado para no perderlo)**:
 - Adelgazar la imagen: quitar libs GPU del runtime de Ollama (`rocm`, CUDA) — el pod es
-  CPU-only. Objetivo: bajar de ~8.3 GB.
+  CPU-only. Objetivo: bajar de ~8.3 GB sin comprimir.
 - Implementar `/api/health` y `/api/ping` (y revisar por qué `HEAD` da 405 en la ruta
   catch-all de estáticos).
+
+---
+
+## 2026-09-02 — Fase 1 · Iteración 1: generación procedural del circuito cerrado
+
+Rama `fase-1-track-fisica` desde `main` (`f88c830`). Fase 1 se hace en 3 iteraciones;
+ésta cubre solo el **núcleo de generación de pista**. Numeración de curvas, racing line,
+física del auto + teclado, y conteo de vueltas / cruce de meta quedan para las iteraciones
+2 y 3.
+
+### Qué se implementó — `unity/Assets/Scripts/Track/` (asmdef `AgenticRacing.Track`)
+
+- **`CatmullRomSpline.cs`** — spline Catmull-Rom **centrípeta** (α = 0.5), cíclica y
+  C1-continua incluida la junta de cierre. La variante centrípeta se eligió a propósito:
+  no genera cúspides ni auto-intersecciones *dentro* de un segmento aunque los puntos de
+  control estén desigualmente espaciados (importa para un circuito jitterado). Incluye
+  `SampleClosed` y `ResampleByArcLength`.
+- **`TrackGenerator.cs`** — `int seed` → `System.Random(seed)` (nunca `UnityEngine.Random`,
+  §10) → 9–14 puntos de control en lazo con jitter radial (−25 %..+30 %) y angular
+  (0.45× el paso, acotado para que el ángulo sea monótono y el lazo no se pliegue) →
+  spline → centerline reesampleada a 2 m. Escala determinista a **1.5–2.5 km**. Valida
+  **sin auto-intersección** (test segmento-segmento O(n²), sólo en generación) y **radio
+  de curva mínimo ≥ 12 m** (curvatura de Menger sobre un **stencil de ~6 m**, no entre
+  puntos adyacentes — ver bug abajo). Si falla → deriva seed con hash SplitMix32 y
+  reintenta (máx. 32), registrando `EffectiveSeed`/`Attempts` en un solo `Debug.Log`.
+- **`TrackMeshBuilder.cs`** — mesh de cinta plana (Y = 0) a lo largo de la centerline,
+  cerrada sin costura en la junta, con UVs (v = arco / 8 m para material tileable).
+- **`TrackConfig.cs`** — lee `?seed=` y `?laps=` de `Application.absoluteURL` con
+  fallback serializado (parseo con `InvariantCulture`).
+- **`TrackBuilder.cs`** — MonoBehaviour: en `Awake` resuelve seed, genera, asigna la mesh
+  a `MeshFilter`/`MeshCollider`, dibuja centerline + línea de meta como gizmos, y expone
+  `Data` (centerline, longitud, radio mínimo, pose de meta) para las fases siguientes.
+
+### Verificación (Unity batchmode local, editor 6000.3.22f1)
+
+- **`unity/Assets/Editor/Fase1TrackValidator.cs`** — barrido `-executeMethod` sobre seeds
+  1..200. Resultado: **PASS, 200/200, 0 fallos**. Sólo **1/200 seeds** (la 117) necesita
+  una seed derivada; longitudes 1898–2500 m; curva más cerrada del barrido 13.3 m.
+- **`unity/Assets/Tests/EditMode/TrackGeneratorTests.cs`** (asmdef
+  `AgenticRacing.Tests.EditMode`, NUnit) — **7/7 tests pasan**: determinismo
+  (misma seed → vértices idénticos bit a bit), lazo cerrado + sin kink en la junta
+  (< 12°), longitud en rango, sin auto-intersección, radio mínimo navegable, seeds
+  distintas → pistas distintas, y fallback determinista (con umbral 22 m para forzarlo
+  en parte del barrido, verifica que la cadena de seeds derivadas es reproducible y que
+  el resultado sigue siendo válido).
+
+### Bug encontrado y corregido durante la iteración
+
+Primera pasada del validador: **181/200 seeds necesitaban seed derivada**, todas por
+"radio de curva < 15 m", y el `tightest corner overall` quedaba clavado en 15.0 m exacto
+(el loop de fallback forzaba hasta rozar el umbral). Causa: la curvatura de Menger se
+medía entre puntos **adyacentes a 2 m** de una centerline que es interpolación lineal de
+un spline muestreado grueso (`SamplesPerSegment = 24` ≈ 7.5 m entre puntos finos), así
+que cada "codo" de la discretización se leía como una horquilla de ~8 m. Fixes:
+`SamplesPerSegment` 24 → 160 (spline fino < 1 m), y medir la curvatura sobre un **stencil
+de ~6 m** (`CurvatureStencil`), no entre vecinos. Además se bajó el jitter
+(radial ±35/45 % → −25/+30 %, angular 0.55 → 0.45) y el umbral de curva a 12 m. Resultado:
+de 181/200 fallbacks a 1/200. También se cambió el `Debug.LogWarning` por-reintento (588
+warnings con stack trace, log de 17k líneas) por un único `Debug.Log` resumido.
+
+### Pendiente de esta iteración (no bloquea, es housekeeping)
+
+- El validador y los tests corren **localmente**; falta que corran en CI. Se abre un PR
+  **draft** de Fase 1 para que el workflow (`pull_request → main`) valide cada push; el
+  job de tests EditMode en CI se añade en la iteración 2 (ahora CI sólo compila WebGL +
+  imagen, que ya cubre que el código de `Track/` compila para WebGL).
+- `unity/ProjectSettings/ProjectSettings.asset` fue tocado por el Editor durante los runs
+  (swap de un define symbol de WebGL, `SENTIS_ANALYTICS_ENABLED` → `APP_UI_EDITOR_ONLY`,
+  sin relación con este trabajo) — revertido para no meter churn en el PR. Si reaparece de
+  forma persistente, tratarlo aparte.
+
+---
+
+## 2026-09-02 — Fase 1 · Iteración 2: forma de circuito, numeración de curvas, racing line
+
+Sigue en la rama `fase-1-track-fisica` / PR #2 (draft).
+
+### Cambio de fondo: modulación radial armónica
+
+La iteración 1 generaba puntos de control con jitter radial simple sobre un círculo, lo
+que producía **casi óvalos** — sin rectas largas ni curvas diferenciadas, mal circuito de
+carreras. Cambiado a **modulación radial armónica**: 2–3 sinusoides de baja frecuencia
+(lóbulos 2–5) con amplitud y fase por seed, más un jitter local pequeño. Eso crea la
+forma real de un trazado — rectas entre lóbulos, curvas en las transiciones. `TrackParams`
+gana `MinHarmonics`/`MaxHarmonics`, `MinHarmonicFreq`/`MaxHarmonicFreq`, `HarmonicAmpMin`/
+`Max`, `RadiusClampMin`/`Max`; `RadialJitter*` pasa a ser sólo el jitter local. Control
+points 16–22 (antes 9–15) para resolver los armónicos.
+
+Efecto medido (barrido validador seeds 1..200): **PASS 200/200**, sólo **6/200** necesitan
+seed derivada, longitudes 1890–2500 m, **5–17 curvas por trazado** (antes 2–3 con jitter
+plano), curva más cerrada del barrido 12.1 m.
+
+### Numeración de curvas — `TrackCorner` + `TrackAnalysis.DetectCorners`
+
+- Curvatura **con signo** por muestra (curvatura de Menger sobre stencil de 6 m, luego
+  media móvil). Signo → giro a izquierda / derecha.
+- Un sector es curva si `|radio| < 220 m` de forma sostenida (≥ 12 m de arco y ≥ 14° de
+  cambio de rumbo); sectores separados por < 14 m se fusionan.
+- **La línea de meta va sobre la recta más larga.** Se detectan curvas una vez, se busca
+  el mayor hueco entre curvas, se rota la centerline para que su punto medio sea el
+  índice 0, y se re-detecta: así las curvas quedan numeradas **1..N desde meta**, ninguna
+  la cruza. (Un test lo pilló: con la meta en `Centerline[0]` arbitrario, una curva podía
+  quedar a caballo de la línea, con arcos no monótonos.)
+- Cada `TrackCorner`: índice, muestras/arcos de entrada·ápice·salida, dirección,
+  cambio de rumbo en grados, radio mínimo. Deterministas por seed.
+
+### Racing line — `TrackAnalysis.BuildRacingLine`
+
+Referencia geométrica, **no óptimo de tiempo de vuelta** (§5 pide "expuesta como
+referencia"). Offset lateral respecto a la centerline: fuera en la aproximación, dentro
+en el ápice, deshaciendo a la salida; rampas que se solapan toman el sesgo más fuerte;
+3 pasadas de media móvil (ventana 18 m) para que sea conducible; clamp a
+`ancho/2 − 1.5 m`. Misma cantidad de puntos que la centerline, cerrada.
+
+`TrackData` ahora expone `Corners` y `RacingLine`. `TrackBuilder` los dibuja como gizmos
+(ápices magenta/rojo por dirección, número `Tn` con `Handles.Label`, racing line cian).
+
+### Verificación
+
+- **EditMode (`TrackGeneratorTests` + `TrackAnalysisTests`): 14/14 pasan.** Los nuevos:
+  determinismo de curvas y racing line por seed, numeración 1..N en orden de arco, ≥ 2
+  curvas por trazado, cada curva gira de verdad (≥ 14°) con ápice entre entrada y salida,
+  racing line con misma cantidad de puntos, cerrada y **dentro de la pista** (≤ ancho/2
+  del eje en todo punto).
+- **`Fase1SceneRender`** (nuevo, `-executeMethod`): PNG cenital rasterizado directo a
+  `Texture2D` (sin escena/cámara) — asfalto, centerline, racing line, meta y ápices
+  numerados. Es el diagnóstico visual del agente. Revisados seeds 7, 12345, 314: forma de
+  circuito real, meta sobre recta, racing line clavando vértices.
+- **`TrackDemoBootstrap`** (nuevo): MonoBehaviour que arma la vista in-browser (cámara
+  cenital + LineRenderers + `TextMesh`) en runtime. Se usará en la iteración 3 para el
+  build WebGL, junto con el coche.
+
+### CI
+
+`.github/workflows/build-and-publish.yml`: nuevo job **`test-editmode`**
+(`game-ci/unity-test-runner@v4`, mismos secrets de licencia). `build-and-push-image` ahora
+`needs: [build-webgl, test-editmode]` — nada se publica a GHCR si los tests fallan.
+`build-webgl` sigue en paralelo con los tests.
+
+### Notas
+
+- La fuente bitmap 3×5 del PNG diagnóstico se ve tosca a 1500 px (glifos algo solapados).
+  Es un diagnóstico interno, no se pulió más; los puntos de color y la forma comunican lo
+  esencial.
+- `ProjectSettings.asset`: el define `APP_UI_EDITOR_ONLY` (de `com.unity.dt.app-ui`, vía
+  `com.unity.ai.inference`) que el Editor añade al target WebGL en cada apertura — en iter
+  1 se revertía, pero reaparece siempre y es correcto (App UI queda editor-only en WebGL).
+  A partir de iter 2 se commitea y se deja de pelear.
+- El fallback de seed derivada subió de 1/200 (iter 1, jitter suave) a 6/200 con la
+  modulación armónica más agresiva. Aceptable y determinista.
+
+---
+
+## 2026-09-02 — Fase 1 · Iteración 3: coche, conteo de vueltas, demo WebGL
+
+Rama `fase-1-track-fisica` / PR #2. Cierra la parte del agente de Fase 1.
+
+### Coche — `unity/Assets/Scripts/Vehicle/` (asmdef `AgenticRacing.Vehicle`)
+
+- **`VehicleConfig`** (ScriptableObject): masa, drag, fuerza de motor/freno/coast, tope de
+  velocidad, tasa de giro (con factor a alta velocidad y fade-in a baja), agarre lateral,
+  downforce. En Fase 1 hay un coche y los valores son defaults aquí; Fase 3 hará que un
+  único asset sea la fuente de verdad para que todos los coches sean idénticos (§3).
+- **`CarController`** (`Rigidbody`, **sin WheelCollider** — §3): todo en `FixedUpdate`.
+  Empuje sobre `+Z`, freno opuesto a la velocidad, coast al soltar; giro arcade por
+  `MoveRotation` con autoridad que crece de 0 (parado) a full (baja vel) y baja a
+  `HighSpeedTurnFactor` en el tope; **agarre lateral** que cancela casi toda la
+  componente de velocidad lateral (lo que se escapa es derrape). `Throttle`/`Brake`/
+  `Steer` son públicos: el teclado los escribe ahora, el RL de Fase 2 y el estratega de
+  Fase 4 escribirán los mismos campos. Teclado (flechas o WASD) leído directo de
+  `Keyboard.current` — `activeInputHandler: 1` (Input System nuevo), `Input.GetAxis` no
+  existe.
+- **`LapDetector`** (clase pura, testeable): plano de meta por `StartPosition` +
+  `StartDirection`; cuenta vuelta sólo al cruzar hacia adelante **y** dentro de
+  `triggerRadius` lateral de la meta (si no, cruzar el plano infinito en otra parte del
+  circuito dispararía en falso); se desarma tras contar hasta volver ~8 m por detrás de
+  la línea (anti-rebote).
+- **`LapTracker`** (MonoBehaviour): enchufa `LapDetector` a un `Transform` de coche y un
+  `TrackData`, cuenta contra `totalLaps`, emite `LapCompleted(int)` y `RaceFinished`, y
+  reporta `Progress01` (muestra más cercana de la centerline, búsqueda en ventana O(1)).
+  `Tick()` es público para tests deterministas.
+
+### Demo jugable — `unity/Assets/Scripts/Demo/` (asmdef `AgenticRacing.Demo`)
+
+`TrackDemoBootstrap` movido aquí desde `Track/` (un asmdef propio evita el ciclo
+Track↔Vehicle). En `Start` arma la escena en runtime: superficie + `MeshCollider`,
+centerline y racing line como `LineRenderer`, línea de meta, ápices numerados con
+`TextMesh`, **un coche cubo** en la línea, `LapTracker`, cámara ortográfica cenital que
+sigue al coche, y un `OnGUI` temporal con "LAP n / N" (el HUD real es DOM en Fase 4, §2.2).
+Lee `?seed=` y `?laps=`.
+
+`unity/Assets/Editor/Fase1WebglBuild.cs` (`-executeMethod`): crea la escena de un objeto
+(`TrackConfig` + `TrackDemoBootstrap`), build WebGL a `Builds/track-demo` con compresión
+desactivada y rutas relativas para servir desde cualquier estático.
+
+### Verificación
+
+- **EditMode: 19/19** (14 previos + 5 `LapDetectorTests`): una vuelta por bucle, ignora el
+  plano lejos de la meta, no re-cuenta con jitter en la línea, 5 bucles → 5 vueltas,
+  `LapTracker` emite `RaceFinished` en la vuelta objetivo. El job `test-editmode` de CI
+  también los corrió en verde en el push de la iteración 2.
+- **Build WebGL**: `Fase1WebglBuild` tardó 3 intentos por el identificador de template.
+  Unity 6 no tiene `PROJECT:Default` ni `APPLICATION:Base` (la carpeta `Base/` del editor
+  es un include, no un template seleccionable); el valor bueno es `APPLICATION:Default`
+  (el que ya trae `ProjectSettings`). El primer intento lo dejó persistido como
+  `PROJECT:Default` y rompió los siguientes — el script ahora **guarda y restaura** los
+  `PlayerSettings` de WebGL que toca (template, compresión, dataCaching, runInBackground)
+  para no ensuciar `ProjectSettings.asset` (CI conserva Brotli y la ruta `.br`/`.gz` que
+  validó Fase 0). Con `APPLICATION:Default` el build compila (IL2CPP → WASM, ~lento en
+  local).
+
+### Bug de render en el build WebGL (URP) — diagnóstico y fix
+
+El primer build WebGL de la demo compiló pero **la escena crasheaba en `Start`** con
+`ArgumentNullException: shader`: `Shader.Find("Universal Render Pipeline/Unlit")` devuelve
+`null` en el player. El segundo build ya no crasheaba (fallback de shader) pero **toda la
+geometría con shader URP salía magenta**, con estos errores en consola:
+
+```
+Hidden/CoreSRP/CoreCopy shader is not supported on this GPU (none of subshaders/fallbacks are suitable)
+Hidden/Universal Render Pipeline/StencilDitherMaskSeed ... not supported
+Hidden/Universal/HDRDebugView ... not supported
+```
+
+Esos tres son **ruido conocido de URP + WebGL en Unity 6** (issue de Unity, no bloquean el
+render). El magenta real era otra cosa: **Unity stripea las variantes de shader que sólo se
+piden por `Shader.Find` en runtime** — nada referencia `URP/Unlit` en build-time, así que
+queda sin subshader válido para WebGL.
+
+**Fix** (commit `5a7a900`):
+- `Fase1WebglBuild` fuerza `Universal Render Pipeline/Unlit` + `.../Lit` en **Always
+  Included Shaders** durante el build, y restaura la lista de `GraphicsSettings` en el
+  `finally` (mismo patrón que ya usa con los `PlayerSettings` de WebGL — no ensucia el
+  proyecto ni afecta a CI, verificado con `git status`).
+- `TrackDemoBootstrap.Tint`: el coche y los puntos de curva usaban el material por defecto
+  de `GameObject.CreatePrimitive` (built-in *Default-Material*, inválido bajo URP → magenta);
+  pasan a `UnlitColor` como el resto.
+
+**Verificado en navegador real** (build local servido con `python -m http.server` en `:8123`):
+la escena arranca sin excepciones (`[TrackDemoBootstrap] seed 7: 2500 m, 13 corners`),
+y pista (gris), centerline (blanca), racing line (cian), meta (verde) y **coche (amarillo)**
+renderizan con sus colores. El HUD `OnGUI` muestra "LAP n / N". Los eventos de teclado
+sintéticos del automation no los toma el Input System, así que el **manejo real queda para
+la prueba del humano**.
+
+### Notas de `Fase1WebglBuild` (identificador de template)
+
+Costó 3 intentos: Unity 6 no acepta `PROJECT:Default` (no hay template custom en
+`Assets/WebGLTemplates/`) ni `APPLICATION:Base` (la carpeta `Base/` del editor es un
+*include*, no un template seleccionable). El bueno es `APPLICATION:Default`, que ya trae
+`ProjectSettings`. El primer intento lo dejó persistido roto; ahora el script guarda y
+restaura `template`, `compressionFormat`, `dataCaching` y `runInBackground`.
+
+### Poner la demo jugable en el navegador — tres bugs encadenados
+
+El build WebGL compilaba pero llegar a una demo conducible costó tres fixes, cada uno con
+su ciclo de build (~15 min de `emcc` en local):
+
+1. **El coche no arrancaba — el teclado no llegaba.** Un HUD de diagnóstico mostró que
+   `Keyboard.current` NO era null pero sus teclas nunca registraban (`anyKey` siempre
+   false). Es el bug conocido del **Input System en builds WebGL de Unity 6**;
+   `WebGLInput.captureAllKeyboardInput = true` no bastó. Fix: `ProjectSettings`
+   `activeInputHandler` 1 → **2 (Both)**, y `CarController` lee con `Input.GetKey` (Input
+   Manager clásico, fiable en WebGL desde siempre); el Input System queda de fallback.
+
+2. **El coche caía a través de la pista.** Con el input ya funcionando, `thr` subía a 1.0
+   al mantener la flecha pero `speed` seguía en 0. Causa: el `MeshCollider` de la cinta no
+   frenaba la caída (o el coche aparecía por debajo), y en vista cenital ortográfica un
+   coche cayendo se ve quieto porque `ForwardSpeed` sólo mide la componente horizontal.
+   Fix: la pista de Fase 1 es plana en Y=0 sin plano de suelo, así que
+   `CarController` pasa a `useGravity = false` + `FreezePositionY`; se quita el collider
+   del cubo (Fase 1 no tiene muros ni contacto entre coches) y el spawn baja a `y = 0.4`.
+
+3. **El HUD nunca pasaba de `LAP 1`.** El conteo por cruce del plano de meta es frágil:
+   depende de la orientación exacta de la recta y del radio lateral. Reescrito a
+   **detección por wrap de progreso**: el índice de muestra de centerline más cercano,
+   normalizado 0..1 desde meta, tiene que subir por encima de `lapArmProgress` (0.65) y
+   luego saltar a `< lapWrapProgress` (0.15). Es lo que usan los juegos de carreras y es
+   inmune a la geometría. `LapDetector` (el test de plano) se conserva sin cablear, para
+   el timing preciso de cruce que necesitará la telemetría del estratega en Fase 4
+   (gaps, tiempos de vuelta).
+
+También en el camino: crash inicial por `Shader.Find("URP/Unlit")` → `null` → `new
+Material(null)`; y todo lo URP salía magenta porque Unity stripea las variantes de shader
+que sólo se piden por `Shader.Find` en runtime. Fix: `Fase1WebglBuild` fuerza `URP/Unlit`
++ `URP/Lit` en Always Included Shaders durante el build (guarda/restaura
+`GraphicsSettings`), y el coche/puntos usan `UnlitColor` en vez del *Default-Material*
+built-in. Los errores `Hidden/CoreSRP/CoreCopy ... not supported on this GPU` son ruido
+conocido de URP+WebGL en Unity 6, no bloquean.
+
+### Cierre de Fase 1 — hecho
+
+El dueño condujo el demo en navegador real: el coche responde a acelerador y curvas, y el
+HUD cuenta las vueltas correctamente al cruzar meta. **Criterio de aceptación de §5
+cumplido.** Se limpió el HUD de debug (queda "LAP n / N" + una línea con seed, nº de
+curvas, km/h, progreso y controles). EditMode 20/20.
+
+**Estado**: PR #2 (`fase-1-track-fisica` → `main`) listo para *ready* y merge. Fase 1
+completa: circuito procedural determinista + numeración de curvas + racing line de
+referencia + coche de física manual conducible + conteo de vueltas, todo verificado por
+tests y por una prueba de conducción humana en el navegador.
+
+**Anotado para más adelante**:
+- El HUD real de la carrera es DOM (§2.2), no `OnGUI`; el `OnGUI` actual es temporal de
+  Fase 1.
+- `cameraSize = 42` da una vista algo cerrada; revisar zoom/seguimiento de cámara cuando
+  haya varios coches (Fase 3) o si molesta al conducir.
+- Fase 2 necesita que el `Agent` de ML-Agents escriba `Throttle`/`Brake`/`Steer` de
+  `CarController` (ya son públicos justo para eso) y que existan ya los canales de
+  directiva en las observaciones (§6.1, §11).
+
+### Pendiente aparte (rendimiento de CI)
+
+El job `build-webgl` de CI del push de la iteración 2 tardó > 50 min (vs ~11 min en Fase 0)
+— vigilar si es el runner o si el proyecto con URP + más código se volvió así de lento;
+puede necesitar caché de `Library` más agresiva o un runner más grande.

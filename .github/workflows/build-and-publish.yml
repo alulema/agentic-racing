@@ -11,6 +11,40 @@ env:
   IMAGE: ghcr.io/alulema/agentic-racing
 
 jobs:
+  test-editmode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/cache@v4
+        with:
+          path: unity/Library
+          key: Library-unity-EditMode-${{ hashFiles('unity/Assets/**', 'unity/Packages/**', 'unity/ProjectSettings/**') }}
+          restore-keys: Library-unity-EditMode-
+
+      # EditMode tests: deterministic track generation + corner numbering +
+      # racing line (unity/Assets/Tests/EditMode/). Same Personal-license secrets
+      # as the build job.
+      - uses: game-ci/unity-test-runner@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          projectPath: unity
+          unityVersion: 6000.3.22f1
+          testMode: EditMode
+          artifactsPath: editmode-test-results
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: editmode-test-results
+          path: editmode-test-results
+          retention-days: 3
+
   build-webgl:
     runs-on: ubuntu-latest
     steps:
@@ -53,7 +87,7 @@ jobs:
           if-no-files-found: error
 
   build-and-push-image:
-    needs: build-webgl
+    needs: [build-webgl, test-editmode]
     runs-on: ubuntu-latest
     permissions:
       contents: read
