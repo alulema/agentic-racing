@@ -40,11 +40,17 @@ jobs:
           targetPlatform: WebGL
           buildsPath: unity-build-output
 
+      # game-ci/unity-builder writes the player to
+      # ${buildsPath}/${targetPlatform}/${buildName}, and buildName defaults to
+      # the target platform too -> unity-build-output/WebGL/WebGL/{Build,
+      # TemplateData,index.html}. Upload that inner dir so the artifact root is
+      # the player itself.
       - uses: actions/upload-artifact@v4
         with:
           name: webgl-build
-          path: unity-build-output/WebGL
+          path: unity-build-output/WebGL/WebGL
           retention-days: 1
+          if-no-files-found: error
 
   build-and-push-image:
     needs: build-webgl
@@ -64,10 +70,13 @@ jobs:
       # DOM overlay shell) instead of Unity's auto-generated one.
       - name: Assemble /web static root
         run: |
-          cp -r unity-build-output/WebGL/Build web/Build
-          cp -r unity-build-output/WebGL/TemplateData web/TemplateData
-          if [ -d unity-build-output/WebGL/StreamingAssets ]; then
-            cp -r unity-build-output/WebGL/StreamingAssets web/StreamingAssets
+          set -euo pipefail
+          src=unity-build-output/WebGL
+          test -d "$src/Build" || { echo "::error::$src/Build missing — artifact layout changed"; ls -R "$src"; exit 1; }
+          cp -r "$src/Build" web/Build
+          cp -r "$src/TemplateData" web/TemplateData
+          if [ -d "$src/StreamingAssets" ]; then
+            cp -r "$src/StreamingAssets" web/StreamingAssets
           fi
 
       # On pull_request we build the image to prove docker/Dockerfile still
