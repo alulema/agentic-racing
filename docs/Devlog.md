@@ -722,15 +722,59 @@ desactivada y rutas relativas para servir desde cualquier estático.
   validó Fase 0). Con `APPLICATION:Default` el build compila (IL2CPP → WASM, ~lento en
   local).
 
-### Retomar aquí
+### Bug de render en el build WebGL (URP) — diagnóstico y fix
 
-- Confirmar el build WebGL de `Builds/track-demo` y probarlo en navegador real: el coche
-  se mueve/gira con flechas/WASD, el `OnGUI` muestra "LAP n / N", la consola loguea
-  `[LapTracker] lap n/N`.
-- **Criterio de aceptación de Fase 1**: que el humano conduzca varias vueltas con teclado
-  en 3 seeds nuevas y confirme que la física "se siente". Con eso, marcar PR #2 ready y
-  mergear.
-- Pendiente aparte: el job `build-webgl` de CI del push de la iteración 2 tardó > 50 min
-  (vs ~11 min en Fase 0) — vigilar si es el runner o si el proyecto con URP + más código
-  se volvió así de lento; puede necesitar caché de `Library` más agresiva o un runner
-  más grande.
+El primer build WebGL de la demo compiló pero **la escena crasheaba en `Start`** con
+`ArgumentNullException: shader`: `Shader.Find("Universal Render Pipeline/Unlit")` devuelve
+`null` en el player. El segundo build ya no crasheaba (fallback de shader) pero **toda la
+geometría con shader URP salía magenta**, con estos errores en consola:
+
+```
+Hidden/CoreSRP/CoreCopy shader is not supported on this GPU (none of subshaders/fallbacks are suitable)
+Hidden/Universal Render Pipeline/StencilDitherMaskSeed ... not supported
+Hidden/Universal/HDRDebugView ... not supported
+```
+
+Esos tres son **ruido conocido de URP + WebGL en Unity 6** (issue de Unity, no bloquean el
+render). El magenta real era otra cosa: **Unity stripea las variantes de shader que sólo se
+piden por `Shader.Find` en runtime** — nada referencia `URP/Unlit` en build-time, así que
+queda sin subshader válido para WebGL.
+
+**Fix** (commit `5a7a900`):
+- `Fase1WebglBuild` fuerza `Universal Render Pipeline/Unlit` + `.../Lit` en **Always
+  Included Shaders** durante el build, y restaura la lista de `GraphicsSettings` en el
+  `finally` (mismo patrón que ya usa con los `PlayerSettings` de WebGL — no ensucia el
+  proyecto ni afecta a CI, verificado con `git status`).
+- `TrackDemoBootstrap.Tint`: el coche y los puntos de curva usaban el material por defecto
+  de `GameObject.CreatePrimitive` (built-in *Default-Material*, inválido bajo URP → magenta);
+  pasan a `UnlitColor` como el resto.
+
+**Verificado en navegador real** (build local servido con `python -m http.server` en `:8123`):
+la escena arranca sin excepciones (`[TrackDemoBootstrap] seed 7: 2500 m, 13 corners`),
+y pista (gris), centerline (blanca), racing line (cian), meta (verde) y **coche (amarillo)**
+renderizan con sus colores. El HUD `OnGUI` muestra "LAP n / N". Los eventos de teclado
+sintéticos del automation no los toma el Input System, así que el **manejo real queda para
+la prueba del humano**.
+
+### Notas de `Fase1WebglBuild` (identificador de template)
+
+Costó 3 intentos: Unity 6 no acepta `PROJECT:Default` (no hay template custom en
+`Assets/WebGLTemplates/`) ni `APPLICATION:Base` (la carpeta `Base/` del editor es un
+*include*, no un template seleccionable). El bueno es `APPLICATION:Default`, que ya trae
+`ProjectSettings`. El primer intento lo dejó persistido roto; ahora el script guarda y
+restaura `template`, `compressionFormat`, `dataCaching` y `runInBackground`.
+
+### Retomar aquí — cierre de Fase 1
+
+- **Criterio de aceptación**: el humano conduce varias vueltas con teclado (flechas/WASD)
+  en 3 seeds nuevas y confirma que la física "se siente" y que el HUD cuenta bien las
+  vueltas. Demo local: `cd unity/Builds/track-demo && python3 -m http.server 8123`, luego
+  `http://127.0.0.1:8123/?seed=<n>&laps=<n>`. Con eso, marcar PR #2 ready y mergear.
+- Ajustar si hace falta tras la prueba: sensibilidad de giro, potencia de motor, tamaño de
+  cámara (`cameraSize` 42 da una vista algo cerrada para conducir).
+
+### Pendiente aparte (rendimiento de CI)
+
+El job `build-webgl` de CI del push de la iteración 2 tardó > 50 min (vs ~11 min en Fase 0)
+— vigilar si es el runner o si el proyecto con URP + más código se volvió así de lento;
+puede necesitar caché de `Library` más agresiva o un runner más grande.
