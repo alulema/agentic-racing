@@ -21,6 +21,8 @@ namespace AgenticRacing.Track
         [Header("Gizmos")]
         [SerializeField] private bool drawCenterline = true;
         [SerializeField] private bool drawStartLine = true;
+        [SerializeField] private bool drawRacingLine = true;
+        [SerializeField] private bool drawCorners = true;
 
         private Mesh _mesh;
 
@@ -78,12 +80,34 @@ namespace AgenticRacing.Track
                     Gizmos.DrawLine(center[i], center[(i + 1) % center.Count]);
             }
 
+            if (drawRacingLine && Data.RacingLine != null)
+            {
+                Gizmos.color = Color.cyan;
+                var rl = Data.RacingLine;
+                for (int i = 0; i < rl.Count; i++)
+                    Gizmos.DrawLine(rl[i], rl[(i + 1) % rl.Count]);
+            }
+
             if (drawStartLine)
             {
                 Vector3 side = Vector3.Cross(Vector3.up, Data.StartDirection).normalized * (Data.Width * 0.5f);
                 Gizmos.color = Color.green;
                 Gizmos.DrawLine(Data.StartPosition - side, Data.StartPosition + side);
                 Gizmos.DrawLine(Data.StartPosition, Data.StartPosition + Data.StartDirection * 8f);
+            }
+
+            if (drawCorners && Data.Corners != null)
+            {
+                foreach (var corner in Data.Corners)
+                {
+                    Vector3 apex = corner.ApexPosition(Data);
+                    Gizmos.color = corner.Direction == CornerDirection.Left ? Color.magenta : Color.red;
+                    Gizmos.DrawSphere(apex, 2f);
+#if UNITY_EDITOR
+                    UnityEditor.Handles.color = Color.white;
+                    UnityEditor.Handles.Label(apex + Vector3.up * 3f, $"T{corner.Index}");
+#endif
+                }
             }
         }
     }

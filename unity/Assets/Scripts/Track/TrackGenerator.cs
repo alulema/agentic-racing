@@ -15,9 +15,17 @@ namespace AgenticRacing.Track
     {
         public int MinControlPoints;
         public int MaxControlPoints;
-        public float BaseRadius;        // metres, before per-point jitter
-        public float RadialJitterMin;   // fraction of BaseRadius, e.g. -0.25
-        public float RadialJitterMax;   // fraction of BaseRadius, e.g.  0.30
+        public float BaseRadius;        // metres, before shaping
+        public int MinHarmonics;       // low-frequency radial lobes (creates straights + corners)
+        public int MaxHarmonics;
+        public int MinHarmonicFreq;    // lobe count per harmonic, e.g. 2
+        public int MaxHarmonicFreq;    // e.g. 5
+        public float HarmonicAmpMin;   // per-harmonic amplitude, fraction of BaseRadius
+        public float HarmonicAmpMax;
+        public float RadialJitterMin;   // small per-point local jitter, fraction of BaseRadius
+        public float RadialJitterMax;
+        public float RadiusClampMin;    // hard clamp on shaped radius, fraction of BaseRadius
+        public float RadiusClampMax;
         public float AngularJitter;     // fraction of the even angular step, [0..1)
         public float MinLength;         // metres  (CLAUDE.md Fase 1: 1500)
         public float MaxLength;         // metres  (CLAUDE.md Fase 1: 2500)
@@ -30,20 +38,28 @@ namespace AgenticRacing.Track
 
         public static TrackParams Default => new TrackParams
         {
-            MinControlPoints = 9,
-            MaxControlPoints = 14,
-            BaseRadius = 320f,          // 2*pi*320 ~= 2010 m nominal
-            RadialJitterMin = -0.25f,
-            RadialJitterMax = 0.30f,
-            AngularJitter = 0.45f,
+            MinControlPoints = 16,
+            MaxControlPoints = 22,
+            BaseRadius = 300f,
+            MinHarmonics = 2,
+            MaxHarmonics = 3,
+            MinHarmonicFreq = 2,
+            MaxHarmonicFreq = 5,
+            HarmonicAmpMin = 0.12f,
+            HarmonicAmpMax = 0.30f,
+            RadialJitterMin = -0.05f,
+            RadialJitterMax = 0.05f,
+            RadiusClampMin = 0.45f,
+            RadiusClampMax = 1.75f,
+            AngularJitter = 0.35f,
             MinLength = 1500f,
             MaxLength = 2500f,
             MinCornerRadius = 12f,
             CenterlineSpacing = 2f,
             CurvatureStencil = 6f,
             TrackWidth = 12f,
-            SamplesPerSegment = 160,
-            MaxAttempts = 32,
+            SamplesPerSegment = 120,
+            MaxAttempts = 40,
         };
     }
 
@@ -79,6 +95,18 @@ namespace AgenticRacing.Track
         /// <summary>Full drivable width of the ribbon, in metres.</summary>
         public float Width { get; }
 
+        /// <summary>
+        /// Numbered corners, 1..N from the start/finish line in lap direction.
+        /// Deterministic for a given seed. Populated by <see cref="TrackAnalysis"/>.
+        /// </summary>
+        public IReadOnlyList<TrackCorner> Corners { get; }
+
+        /// <summary>
+        /// Geometric reference racing line as world points (Y = 0), same count and
+        /// ordering as <see cref="Centerline"/>, closed. Not a lap-time optimum.
+        /// </summary>
+        public IReadOnlyList<Vector3> RacingLine { get; }
+
         /// <summary>World position of the start/finish line (== Centerline[0]).</summary>
         public Vector3 StartPosition => Centerline[0];
 
@@ -87,7 +115,8 @@ namespace AgenticRacing.Track
 
         internal TrackData(int requestedSeed, int effectiveSeed, int attempts,
             IReadOnlyList<Vector3> centerline, float length, float minCornerRadius,
-            float width, Vector3 startDirection)
+            float width, Vector3 startDirection,
+            IReadOnlyList<TrackCorner> corners, IReadOnlyList<Vector3> racingLine)
         {
             RequestedSeed = requestedSeed;
             EffectiveSeed = effectiveSeed;
@@ -97,6 +126,8 @@ namespace AgenticRacing.Track
             MinCornerRadius = minCornerRadius;
             Width = width;
             StartDirection = startDirection;
+            Corners = corners;
+            RacingLine = racingLine;
         }
     }
 
@@ -148,6 +179,21 @@ namespace AgenticRacing.Track
             data = null;
             var rng = new System.Random(effectiveSeed);
 
+            // Low-frequency radial harmonics give the loop real shape — long
+            // straights between lobes, distinct corners at the transitions —
+            // instead of the near-circular blob that plain per-point jitter
+            // produces (CLAUDE.md Fase 1: curvas numeradas que sean referentes).
+            int harmonics = rng.Next(p.MinHarmonics, p.MaxHarmonics + 1);
+            var freq = new int[harmonics];
+            var amp = new float[harmonics];
+            var phase = new float[harmonics];
+            for (int h = 0; h < harmonics; h++)
+            {
+                freq[h] = rng.Next(p.MinHarmonicFreq, p.MaxHarmonicFreq + 1);
+                amp[h] = Mathf.Lerp(p.HarmonicAmpMin, p.HarmonicAmpMax, (float)rng.NextDouble());
+                phase[h] = (float)rng.NextDouble() * Mathf.PI * 2f;
+            }
+
             int controlCount = rng.Next(p.MinControlPoints, p.MaxControlPoints + 1);
             var control = new List<Vector2>(controlCount);
             float step = Mathf.PI * 2f / controlCount;
@@ -156,8 +202,13 @@ namespace AgenticRacing.Track
                 // Angle stays monotonic: even slot + bounded jitter that cannot
                 // reach the next slot, so the loop never folds back on itself.
                 float angle = i * step + ((float)rng.NextDouble() - 0.5f) * step * p.AngularJitter;
-                float radial = Mathf.Lerp(p.RadialJitterMin, p.RadialJitterMax, (float)rng.NextDouble());
-                float radius = p.BaseRadius * (1f + radial);
+
+                float modulation = 0f;
+                for (int h = 0; h < harmonics; h++)
+                    modulation += amp[h] * Mathf.Sin(angle * freq[h] + phase[h]);
+                modulation += Mathf.Lerp(p.RadialJitterMin, p.RadialJitterMax, (float)rng.NextDouble());
+
+                float radius = p.BaseRadius * Mathf.Clamp(1f + modulation, p.RadiusClampMin, p.RadiusClampMax);
                 control.Add(new Vector2(Mathf.Cos(angle) * radius, Mathf.Sin(angle) * radius));
             }
 
@@ -195,11 +246,28 @@ namespace AgenticRacing.Track
                 return false;
             }
 
-            var centerline3D = new List<Vector3>(centerline2D.Count);
-            foreach (var v in centerline2D) centerline3D.Add(new Vector3(v.x, 0f, v.y));
+            var rawCenterline = new List<Vector3>(centerline2D.Count);
+            foreach (var v in centerline2D) rawCenterline.Add(new Vector3(v.x, 0f, v.y));
+
+            var analysis = TrackAnalysisParams.Default;
+
+            // Put the start/finish line on the longest straight and number the
+            // corners from there (CLAUDE.md Fase 1). Detect once to find that
+            // straight, rotate the loop so its midpoint is index 0, then detect
+            // again so corners are numbered 1..N from the line with none
+            // straddling it.
+            var provisionalCorners = TrackAnalysis.DetectCorners(rawCenterline, p.CenterlineSpacing, analysis);
+            int startIndex = TrackAnalysis.LongestStraightMidpoint(provisionalCorners, rawCenterline.Count);
+            var centerline3D = TrackAnalysis.RotateLoop(rawCenterline, startIndex);
+
+            var corners = TrackAnalysis.DetectCorners(centerline3D, p.CenterlineSpacing, analysis);
+            var racingLine = TrackAnalysis.BuildRacingLine(
+                centerline3D, p.TrackWidth, corners, p.CenterlineSpacing, analysis);
 
             Vector3 startDir = (centerline3D[1] - centerline3D[0]).normalized;
-            data = new TrackData(requestedSeed, effectiveSeed, attempt, centerline3D, length, minRadius, p.TrackWidth, startDir);
+
+            data = new TrackData(requestedSeed, effectiveSeed, attempt, centerline3D, length, minRadius,
+                p.TrackWidth, startDir, corners, racingLine);
             reason = null;
             return true;
         }
@@ -302,6 +370,12 @@ namespace AgenticRacing.Track
             if (p.MaxControlPoints < p.MinControlPoints)
                 throw new ArgumentException("MaxControlPoints must be >= MinControlPoints.");
             if (p.BaseRadius <= 0f) throw new ArgumentException("BaseRadius must be > 0.");
+            if (p.MinHarmonics < 1 || p.MaxHarmonics < p.MinHarmonics)
+                throw new ArgumentException("Require 1 <= MinHarmonics <= MaxHarmonics.");
+            if (p.MinHarmonicFreq < 1 || p.MaxHarmonicFreq < p.MinHarmonicFreq)
+                throw new ArgumentException("Require 1 <= MinHarmonicFreq <= MaxHarmonicFreq.");
+            if (p.RadiusClampMin <= 0f || p.RadiusClampMax <= p.RadiusClampMin)
+                throw new ArgumentException("Require 0 < RadiusClampMin < RadiusClampMax.");
             if (p.MinLength <= 0f || p.MaxLength <= p.MinLength)
                 throw new ArgumentException("Require 0 < MinLength < MaxLength.");
             if (p.CenterlineSpacing <= 0f) throw new ArgumentException("CenterlineSpacing must be > 0.");

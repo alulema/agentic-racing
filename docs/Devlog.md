@@ -582,11 +582,93 @@ warnings con stack trace, log de 17k líneas) por un único `Debug.Log` resumido
   sin relación con este trabajo) — revertido para no meter churn en el PR. Si reaparece de
   forma persistente, tratarlo aparte.
 
-### Retomar aquí — Fase 1, iteración 2
+---
 
-1. Numeración de curvas: detectar sectores de curvatura significativa sobre la centerline
-   y asignar índices estables y deterministas (curva 1, 2, 3…). Exponerlos en `TrackData`.
-2. Racing line (trazada ideal) calculada y expuesta como referencia.
-3. Añadir un job de tests EditMode al workflow de CI.
-4. Escena de demo mínima (`TrackBuilder` + cámara cenital) para inspección visual y para
-   que el humano confirme el trazado.
+## 2026-09-02 — Fase 1 · Iteración 2: forma de circuito, numeración de curvas, racing line
+
+Sigue en la rama `fase-1-track-fisica` / PR #2 (draft).
+
+### Cambio de fondo: modulación radial armónica
+
+La iteración 1 generaba puntos de control con jitter radial simple sobre un círculo, lo
+que producía **casi óvalos** — sin rectas largas ni curvas diferenciadas, mal circuito de
+carreras. Cambiado a **modulación radial armónica**: 2–3 sinusoides de baja frecuencia
+(lóbulos 2–5) con amplitud y fase por seed, más un jitter local pequeño. Eso crea la
+forma real de un trazado — rectas entre lóbulos, curvas en las transiciones. `TrackParams`
+gana `MinHarmonics`/`MaxHarmonics`, `MinHarmonicFreq`/`MaxHarmonicFreq`, `HarmonicAmpMin`/
+`Max`, `RadiusClampMin`/`Max`; `RadialJitter*` pasa a ser sólo el jitter local. Control
+points 16–22 (antes 9–15) para resolver los armónicos.
+
+Efecto medido (barrido validador seeds 1..200): **PASS 200/200**, sólo **6/200** necesitan
+seed derivada, longitudes 1890–2500 m, **5–17 curvas por trazado** (antes 2–3 con jitter
+plano), curva más cerrada del barrido 12.1 m.
+
+### Numeración de curvas — `TrackCorner` + `TrackAnalysis.DetectCorners`
+
+- Curvatura **con signo** por muestra (curvatura de Menger sobre stencil de 6 m, luego
+  media móvil). Signo → giro a izquierda / derecha.
+- Un sector es curva si `|radio| < 220 m` de forma sostenida (≥ 12 m de arco y ≥ 14° de
+  cambio de rumbo); sectores separados por < 14 m se fusionan.
+- **La línea de meta va sobre la recta más larga.** Se detectan curvas una vez, se busca
+  el mayor hueco entre curvas, se rota la centerline para que su punto medio sea el
+  índice 0, y se re-detecta: así las curvas quedan numeradas **1..N desde meta**, ninguna
+  la cruza. (Un test lo pilló: con la meta en `Centerline[0]` arbitrario, una curva podía
+  quedar a caballo de la línea, con arcos no monótonos.)
+- Cada `TrackCorner`: índice, muestras/arcos de entrada·ápice·salida, dirección,
+  cambio de rumbo en grados, radio mínimo. Deterministas por seed.
+
+### Racing line — `TrackAnalysis.BuildRacingLine`
+
+Referencia geométrica, **no óptimo de tiempo de vuelta** (§5 pide "expuesta como
+referencia"). Offset lateral respecto a la centerline: fuera en la aproximación, dentro
+en el ápice, deshaciendo a la salida; rampas que se solapan toman el sesgo más fuerte;
+3 pasadas de media móvil (ventana 18 m) para que sea conducible; clamp a
+`ancho/2 − 1.5 m`. Misma cantidad de puntos que la centerline, cerrada.
+
+`TrackData` ahora expone `Corners` y `RacingLine`. `TrackBuilder` los dibuja como gizmos
+(ápices magenta/rojo por dirección, número `Tn` con `Handles.Label`, racing line cian).
+
+### Verificación
+
+- **EditMode (`TrackGeneratorTests` + `TrackAnalysisTests`): 14/14 pasan.** Los nuevos:
+  determinismo de curvas y racing line por seed, numeración 1..N en orden de arco, ≥ 2
+  curvas por trazado, cada curva gira de verdad (≥ 14°) con ápice entre entrada y salida,
+  racing line con misma cantidad de puntos, cerrada y **dentro de la pista** (≤ ancho/2
+  del eje en todo punto).
+- **`Fase1SceneRender`** (nuevo, `-executeMethod`): PNG cenital rasterizado directo a
+  `Texture2D` (sin escena/cámara) — asfalto, centerline, racing line, meta y ápices
+  numerados. Es el diagnóstico visual del agente. Revisados seeds 7, 12345, 314: forma de
+  circuito real, meta sobre recta, racing line clavando vértices.
+- **`TrackDemoBootstrap`** (nuevo): MonoBehaviour que arma la vista in-browser (cámara
+  cenital + LineRenderers + `TextMesh`) en runtime. Se usará en la iteración 3 para el
+  build WebGL, junto con el coche.
+
+### CI
+
+`.github/workflows/build-and-publish.yml`: nuevo job **`test-editmode`**
+(`game-ci/unity-test-runner@v4`, mismos secrets de licencia). `build-and-push-image` ahora
+`needs: [build-webgl, test-editmode]` — nada se publica a GHCR si los tests fallan.
+`build-webgl` sigue en paralelo con los tests.
+
+### Notas
+
+- La fuente bitmap 3×5 del PNG diagnóstico se ve tosca a 1500 px (glifos algo solapados).
+  Es un diagnóstico interno, no se pulió más; los puntos de color y la forma comunican lo
+  esencial.
+- `ProjectSettings.asset`: el define `APP_UI_EDITOR_ONLY` (de `com.unity.dt.app-ui`, vía
+  `com.unity.ai.inference`) que el Editor añade al target WebGL en cada apertura — en iter
+  1 se revertía, pero reaparece siempre y es correcto (App UI queda editor-only en WebGL).
+  A partir de iter 2 se commitea y se deja de pelear.
+- El fallback de seed derivada subió de 1/200 (iter 1, jitter suave) a 6/200 con la
+  modulación armónica más agresiva. Aceptable y determinista.
+
+### Retomar aquí — Fase 1, iteración 3 (cierre de fase)
+
+1. Coche: física de torque manual (Rigidbody, **sin WheelCollider** — §3) + fricción
+   lateral, controlable por teclado en `FixedUpdate`.
+2. Conteo de vueltas y detección de cruce de meta (usar la pose de meta de `TrackData`).
+3. Build WebGL de `TrackDemoBootstrap` + coche → **primera vista jugable en el browser**;
+   servirlo y validar en navegador real.
+4. Criterio de aceptación de Fase 1: un humano da varias vueltas con teclado en 3 seeds
+   nuevas, la física "se siente", el conteo de vueltas es correcto. Marcar PR #2 como
+   ready y mergear.

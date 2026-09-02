@@ -24,13 +24,14 @@ namespace AgenticRacing.EditorTools
             var sb = new StringBuilder();
             sb.AppendLine($"[Fase1TrackValidator] seeds {seedStart}..{seedStart + seedCount - 1}  " +
                           $"(len {p.MinLength:F0}-{p.MaxLength:F0} m, min corner {p.MinCornerRadius:F0} m)");
-            sb.AppendLine("  seed  | effSeed | tries | length m | minR m | points | ok");
-            sb.AppendLine("  ------+---------+-------+----------+--------+--------+----");
+            sb.AppendLine("  seed  | effSeed | tries | length m | minR m | pts  | crn | ok");
+            sb.AppendLine("  ------+---------+-------+----------+--------+------+-----+----");
 
             int failures = 0;
             float minRadiusSeen = float.MaxValue;
             float shortest = float.MaxValue, longest = 0f;
             int fellBack = 0;
+            int minCorners = int.MaxValue, maxCorners = 0;
 
             for (int k = 0; k < seedCount; k++)
             {
@@ -45,13 +46,17 @@ namespace AgenticRacing.EditorTools
                          && t.MinCornerRadius >= p.MinCornerRadius
                          && !SelfIntersects(t);
 
+                    ok &= t.Corners.Count >= 2;
+
                     if (t.Attempts > 1) fellBack++;
                     minRadiusSeen = Mathf.Min(minRadiusSeen, t.MinCornerRadius);
                     shortest = Mathf.Min(shortest, t.Length);
                     longest = Mathf.Max(longest, t.Length);
+                    minCorners = Mathf.Min(minCorners, t.Corners.Count);
+                    maxCorners = Mathf.Max(maxCorners, t.Corners.Count);
 
                     row = $"  {seed,5} | {t.EffectiveSeed,7} | {t.Attempts,5} | {t.Length,8:F0} | " +
-                          $"{t.MinCornerRadius,6:F1} | {t.Centerline.Count,6} | {(ok ? "yes" : "NO")}";
+                          $"{t.MinCornerRadius,6:F1} | {t.Centerline.Count,4} | {t.Corners.Count,3} | {(ok ? "yes" : "NO")}";
                 }
                 catch (System.Exception e)
                 {
@@ -66,6 +71,7 @@ namespace AgenticRacing.EditorTools
             sb.AppendLine();
             sb.AppendLine($"  tracks needing a derived seed: {fellBack}/{seedCount}");
             sb.AppendLine($"  length span: {shortest:F0}..{longest:F0} m   tightest corner overall: {minRadiusSeen:F1} m");
+            sb.AppendLine($"  corners per track: {minCorners}..{maxCorners}");
             sb.AppendLine(failures == 0
                 ? $"[Fase1TrackValidator] PASS — {seedCount} seeds, 0 failures"
                 : $"[Fase1TrackValidator] FAIL — {failures}/{seedCount} seeds failed");
