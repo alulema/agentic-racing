@@ -21,6 +21,13 @@ namespace AgenticRacing.Vehicle
 
         private Rigidbody _rb;
 
+        /// <summary>
+        /// When true the keyboard drives the car. The RL agent (Fase 2) and the
+        /// strategist (Fase 4) turn this off and write <see cref="Throttle"/> /
+        /// <see cref="Brake"/> / <see cref="Steer"/> directly.
+        /// </summary>
+        public bool ReadKeyboard { get => readKeyboard; set => readKeyboard = value; }
+
         /// <summary>-1..1 forward request (keyboard or external controller).</summary>
         public float Throttle { get; set; }
         /// <summary>0..1 brake request.</summary>
