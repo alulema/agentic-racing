@@ -68,16 +68,12 @@ namespace AgenticRacing.Demo
                 ? "FINISHED"
                 : $"LAP {Mathf.Min(_lapTracker.CurrentLap, _lapTracker.TotalLaps)} / {_lapTracker.TotalLaps}";
             GUI.Label(new Rect(16, 12, 400, 30), lap, style);
+
+            float kmh = _carController != null ? _carController.ForwardSpeed * 3.6f : 0f;
             var small = new GUIStyle(GUI.skin.label) { fontSize = 13, normal = { textColor = new Color(0.8f, 0.8f, 0.8f) } };
-            GUI.Label(new Rect(16, 40, 500, 24),
-                $"seed {_track.EffectiveSeed}   {_track.Corners.Count} corners   arrows / WASD", small);
-            if (_carController != null)
-            {
-                GUI.Label(new Rect(16, 62, 700, 24),
-                    $"speed {_carController.ForwardSpeed:F1} m/s   {_carController.InputDebug}", small);
-            }
-            GUI.Label(new Rect(16, 82, 700, 24),
-                $"progress {_lapTracker.Progress01:P0}   {_lapTracker.DetectorDebug}", small);
+            GUI.Label(new Rect(16, 40, 560, 24),
+                $"seed {_track.EffectiveSeed}   {_track.Corners.Count} corners   " +
+                $"{kmh:F0} km/h   {_lapTracker.Progress01:P0}   arrows / WASD", small);
         }
 
         // --- builders --------------------------------------------------------

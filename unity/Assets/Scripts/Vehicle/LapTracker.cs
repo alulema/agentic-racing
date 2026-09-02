@@ -13,21 +13,20 @@ namespace AgenticRacing.Vehicle
     /// index, normalised to 0..1 from the start/finish line, has to climb past a
     /// good fraction of the loop and then jump back down near zero. This is
     /// robust on a twisty circuit, unlike a start-line plane crossing which is
-    /// sensitive to how the straight is oriented. A <see cref="LapDetector"/>
-    /// plane test runs alongside as a cross-check and only logs when it disagrees.
+    /// sensitive to how the straight is oriented. (<see cref="LapDetector"/> is
+    /// the exact plane test, kept for the precise line-crossing timing that the
+    /// Fase 4 strategist telemetry will need — gaps and lap times.)
     /// </summary>
     public sealed class LapTracker : MonoBehaviour
     {
         [SerializeField] private Transform car;
         [SerializeField, Min(1)] private int totalLaps = 5;
-        [SerializeField] private float triggerRadius = 25f;
 
         [Tooltip("Progress the car must reach before a wrap counts as a lap.")]
         [SerializeField, Range(0.5f, 0.95f)] private float lapArmProgress = 0.65f;
         [Tooltip("Progress the car must drop below to complete the wrap.")]
         [SerializeField, Range(0.02f, 0.3f)] private float lapWrapProgress = 0.15f;
 
-        private LapDetector _detector;
         private TrackData _track;
         private int _nearestSample;
         private float _maxProgressThisLap;
@@ -46,17 +45,11 @@ namespace AgenticRacing.Vehicle
         /// <summary>0..1 position around the centerline from the start/finish line.</summary>
         public float Progress01 { get; private set; }
 
-        /// <summary>Internal state for an on-screen debug readout.</summary>
-        public string DetectorDebug =>
-            $"prog={Progress01:F2}  max={_maxProgressThisLap:F2}  armed={_lapArmed}  " +
-            $"plane[{(_detector == null ? "-" : $"ahead={_detector.LastAhead:F0} laps={_detector.LapsCompleted}")}]";
-
         public void Initialise(TrackData track, Transform carTransform, int laps)
         {
             _track = track;
             car = carTransform;
             totalLaps = Mathf.Max(1, laps);
-            _detector = new LapDetector(track.StartPosition, track.StartDirection, triggerRadius);
 
             // Seed the nearest sample from the car's current position so the
             // windowed search starts locked on, not at index 0.
@@ -88,21 +81,14 @@ namespace AgenticRacing.Vehicle
         {
             if (_track == null || car == null) return;
 
-            Vector3 pos = car.position;
             float prev = Progress01;
-            UpdateProgress(pos);
+            UpdateProgress(car.position);
 
             if (Progress01 > _maxProgressThisLap) _maxProgressThisLap = Progress01;
             if (_maxProgressThisLap >= lapArmProgress) _lapArmed = true;
 
             // Wrap: progress was high last step and has dropped near zero.
-            bool wrapped = _lapArmed && prev > 0.5f && Progress01 < lapWrapProgress;
-            if (wrapped) CompleteLap();
-
-            _detector?.Tick(pos);
-            if (_detector != null && _detector.LapsCompleted != LapsCompleted)
-                Debug.Log($"[LapTracker] plane detector ({_detector.LapsCompleted}) disagrees with " +
-                          $"progress detector ({LapsCompleted}).");
+            if (_lapArmed && prev > 0.5f && Progress01 < lapWrapProgress) CompleteLap();
         }
 
         private void CompleteLap()
@@ -124,14 +110,15 @@ namespace AgenticRacing.Vehicle
 
         private void UpdateProgress(Vector3 pos)
         {
-            int n = _track.Centerline.Count;
+            var center = _track.Centerline;
+            int n = center.Count;
             const int window = 60;
             int best = _nearestSample;
-            float bestSqr = (_track.Centerline[best] - pos).sqrMagnitude;
+            float bestSqr = (center[best] - pos).sqrMagnitude;
             for (int d = -window; d <= window; d++)
             {
                 int i = ((_nearestSample + d) % n + n) % n;
-                float sqr = (_track.Centerline[i] - pos).sqrMagnitude;
+                float sqr = (center[i] - pos).sqrMagnitude;
                 if (sqr < bestSqr) { bestSqr = sqr; best = i; }
             }
             _nearestSample = best;

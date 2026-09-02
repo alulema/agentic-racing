@@ -34,9 +34,6 @@ namespace AgenticRacing.Vehicle
         /// <summary>The parameters in force. Never null after Awake.</summary>
         public VehicleConfig Config => config;
 
-        /// <summary>One-line snapshot of the input state, for an on-screen debug readout.</summary>
-        public string InputDebug { get; private set; } = "(no input yet)";
-
         private void Awake()
         {
             _rb = GetComponent<Rigidbody>();
@@ -77,19 +74,17 @@ namespace AgenticRacing.Vehicle
         private void PollKeyboard()
         {
             float t = 0f, s = 0f;
-            bool brakeKey = false;
-            string src;
+            bool brakeKey;
 
 #if ENABLE_LEGACY_INPUT_MANAGER
             // The legacy Input Manager's keyboard is reliable in WebGL, unlike the
             // Input System's keyboard which in Unity 6 WebGL builds often never
-            // receives events. This is the primary path (activeInputHandler=Both).
+            // receives events (project uses activeInputHandler=Both for this).
             if (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.W)) t += 1f;
             if (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.S)) t -= 1f;
             if (Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A)) s -= 1f;
             if (Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D)) s += 1f;
             brakeKey = Input.GetKey(KeyCode.Space);
-            src = "legacy";
 #else
             var kb = Keyboard.current;
             if (kb != null)
@@ -98,19 +93,14 @@ namespace AgenticRacing.Vehicle
                 if (kb.downArrowKey.isPressed || kb.sKey.isPressed) t -= 1f;
                 if (kb.leftArrowKey.isPressed || kb.aKey.isPressed) s -= 1f;
                 if (kb.rightArrowKey.isPressed || kb.dKey.isPressed) s += 1f;
-                brakeKey = kb.spaceKey.isPressed;
             }
-            src = kb != null ? "inputsystem" : "none";
+            brakeKey = kb != null && kb.spaceKey.isPressed;
 #endif
 
             Steer = s;
             // Down/S brakes while moving forward, otherwise it reverses.
             if (t < 0f && ForwardSpeed > 0.5f) { Brake = 1f; Throttle = 0f; }
             else { Brake = brakeKey ? 1f : 0f; Throttle = t; }
-
-            Vector3 v = _rb.linearVelocity;
-            InputDebug = $"src={src}  thr={Throttle:F1}  str={Steer:F1}  " +
-                         $"|v|={v.magnitude:F1}  vy={v.y:F1}  kin={_rb.isKinematic}";
         }
 
         private void ApplyDrive(Vector3 fwd, float vFwd)

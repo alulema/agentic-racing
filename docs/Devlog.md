@@ -764,14 +764,63 @@ Costó 3 intentos: Unity 6 no acepta `PROJECT:Default` (no hay template custom e
 `ProjectSettings`. El primer intento lo dejó persistido roto; ahora el script guarda y
 restaura `template`, `compressionFormat`, `dataCaching` y `runInBackground`.
 
-### Retomar aquí — cierre de Fase 1
+### Poner la demo jugable en el navegador — tres bugs encadenados
 
-- **Criterio de aceptación**: el humano conduce varias vueltas con teclado (flechas/WASD)
-  en 3 seeds nuevas y confirma que la física "se siente" y que el HUD cuenta bien las
-  vueltas. Demo local: `cd unity/Builds/track-demo && python3 -m http.server 8123`, luego
-  `http://127.0.0.1:8123/?seed=<n>&laps=<n>`. Con eso, marcar PR #2 ready y mergear.
-- Ajustar si hace falta tras la prueba: sensibilidad de giro, potencia de motor, tamaño de
-  cámara (`cameraSize` 42 da una vista algo cerrada para conducir).
+El build WebGL compilaba pero llegar a una demo conducible costó tres fixes, cada uno con
+su ciclo de build (~15 min de `emcc` en local):
+
+1. **El coche no arrancaba — el teclado no llegaba.** Un HUD de diagnóstico mostró que
+   `Keyboard.current` NO era null pero sus teclas nunca registraban (`anyKey` siempre
+   false). Es el bug conocido del **Input System en builds WebGL de Unity 6**;
+   `WebGLInput.captureAllKeyboardInput = true` no bastó. Fix: `ProjectSettings`
+   `activeInputHandler` 1 → **2 (Both)**, y `CarController` lee con `Input.GetKey` (Input
+   Manager clásico, fiable en WebGL desde siempre); el Input System queda de fallback.
+
+2. **El coche caía a través de la pista.** Con el input ya funcionando, `thr` subía a 1.0
+   al mantener la flecha pero `speed` seguía en 0. Causa: el `MeshCollider` de la cinta no
+   frenaba la caída (o el coche aparecía por debajo), y en vista cenital ortográfica un
+   coche cayendo se ve quieto porque `ForwardSpeed` sólo mide la componente horizontal.
+   Fix: la pista de Fase 1 es plana en Y=0 sin plano de suelo, así que
+   `CarController` pasa a `useGravity = false` + `FreezePositionY`; se quita el collider
+   del cubo (Fase 1 no tiene muros ni contacto entre coches) y el spawn baja a `y = 0.4`.
+
+3. **El HUD nunca pasaba de `LAP 1`.** El conteo por cruce del plano de meta es frágil:
+   depende de la orientación exacta de la recta y del radio lateral. Reescrito a
+   **detección por wrap de progreso**: el índice de muestra de centerline más cercano,
+   normalizado 0..1 desde meta, tiene que subir por encima de `lapArmProgress` (0.65) y
+   luego saltar a `< lapWrapProgress` (0.15). Es lo que usan los juegos de carreras y es
+   inmune a la geometría. `LapDetector` (el test de plano) se conserva sin cablear, para
+   el timing preciso de cruce que necesitará la telemetría del estratega en Fase 4
+   (gaps, tiempos de vuelta).
+
+También en el camino: crash inicial por `Shader.Find("URP/Unlit")` → `null` → `new
+Material(null)`; y todo lo URP salía magenta porque Unity stripea las variantes de shader
+que sólo se piden por `Shader.Find` en runtime. Fix: `Fase1WebglBuild` fuerza `URP/Unlit`
++ `URP/Lit` en Always Included Shaders durante el build (guarda/restaura
+`GraphicsSettings`), y el coche/puntos usan `UnlitColor` en vez del *Default-Material*
+built-in. Los errores `Hidden/CoreSRP/CoreCopy ... not supported on this GPU` son ruido
+conocido de URP+WebGL en Unity 6, no bloquean.
+
+### Cierre de Fase 1 — hecho
+
+El dueño condujo el demo en navegador real: el coche responde a acelerador y curvas, y el
+HUD cuenta las vueltas correctamente al cruzar meta. **Criterio de aceptación de §5
+cumplido.** Se limpió el HUD de debug (queda "LAP n / N" + una línea con seed, nº de
+curvas, km/h, progreso y controles). EditMode 20/20.
+
+**Estado**: PR #2 (`fase-1-track-fisica` → `main`) listo para *ready* y merge. Fase 1
+completa: circuito procedural determinista + numeración de curvas + racing line de
+referencia + coche de física manual conducible + conteo de vueltas, todo verificado por
+tests y por una prueba de conducción humana en el navegador.
+
+**Anotado para más adelante**:
+- El HUD real de la carrera es DOM (§2.2), no `OnGUI`; el `OnGUI` actual es temporal de
+  Fase 1.
+- `cameraSize = 42` da una vista algo cerrada; revisar zoom/seguimiento de cámara cuando
+  haya varios coches (Fase 3) o si molesta al conducir.
+- Fase 2 necesita que el `Agent` de ML-Agents escriba `Throttle`/`Brake`/`Steer` de
+  `CarController` (ya son públicos justo para eso) y que existan ya los canales de
+  directiva en las observaciones (§6.1, §11).
 
 ### Pendiente aparte (rendimiento de CI)
 
