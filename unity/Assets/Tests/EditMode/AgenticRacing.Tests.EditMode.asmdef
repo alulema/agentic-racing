@@ -3,6 +3,7 @@
     "rootNamespace": "AgenticRacing.Tests",
     "references": [
         "AgenticRacing.Track",
+        "AgenticRacing.Vehicle",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

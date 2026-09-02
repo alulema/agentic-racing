@@ -662,13 +662,75 @@ en el ápice, deshaciendo a la salida; rampas que se solapan toman el sesgo más
 - El fallback de seed derivada subió de 1/200 (iter 1, jitter suave) a 6/200 con la
   modulación armónica más agresiva. Aceptable y determinista.
 
-### Retomar aquí — Fase 1, iteración 3 (cierre de fase)
+---
 
-1. Coche: física de torque manual (Rigidbody, **sin WheelCollider** — §3) + fricción
-   lateral, controlable por teclado en `FixedUpdate`.
-2. Conteo de vueltas y detección de cruce de meta (usar la pose de meta de `TrackData`).
-3. Build WebGL de `TrackDemoBootstrap` + coche → **primera vista jugable en el browser**;
-   servirlo y validar en navegador real.
-4. Criterio de aceptación de Fase 1: un humano da varias vueltas con teclado en 3 seeds
-   nuevas, la física "se siente", el conteo de vueltas es correcto. Marcar PR #2 como
-   ready y mergear.
+## 2026-09-02 — Fase 1 · Iteración 3: coche, conteo de vueltas, demo WebGL
+
+Rama `fase-1-track-fisica` / PR #2. Cierra la parte del agente de Fase 1.
+
+### Coche — `unity/Assets/Scripts/Vehicle/` (asmdef `AgenticRacing.Vehicle`)
+
+- **`VehicleConfig`** (ScriptableObject): masa, drag, fuerza de motor/freno/coast, tope de
+  velocidad, tasa de giro (con factor a alta velocidad y fade-in a baja), agarre lateral,
+  downforce. En Fase 1 hay un coche y los valores son defaults aquí; Fase 3 hará que un
+  único asset sea la fuente de verdad para que todos los coches sean idénticos (§3).
+- **`CarController`** (`Rigidbody`, **sin WheelCollider** — §3): todo en `FixedUpdate`.
+  Empuje sobre `+Z`, freno opuesto a la velocidad, coast al soltar; giro arcade por
+  `MoveRotation` con autoridad que crece de 0 (parado) a full (baja vel) y baja a
+  `HighSpeedTurnFactor` en el tope; **agarre lateral** que cancela casi toda la
+  componente de velocidad lateral (lo que se escapa es derrape). `Throttle`/`Brake`/
+  `Steer` son públicos: el teclado los escribe ahora, el RL de Fase 2 y el estratega de
+  Fase 4 escribirán los mismos campos. Teclado (flechas o WASD) leído directo de
+  `Keyboard.current` — `activeInputHandler: 1` (Input System nuevo), `Input.GetAxis` no
+  existe.
+- **`LapDetector`** (clase pura, testeable): plano de meta por `StartPosition` +
+  `StartDirection`; cuenta vuelta sólo al cruzar hacia adelante **y** dentro de
+  `triggerRadius` lateral de la meta (si no, cruzar el plano infinito en otra parte del
+  circuito dispararía en falso); se desarma tras contar hasta volver ~8 m por detrás de
+  la línea (anti-rebote).
+- **`LapTracker`** (MonoBehaviour): enchufa `LapDetector` a un `Transform` de coche y un
+  `TrackData`, cuenta contra `totalLaps`, emite `LapCompleted(int)` y `RaceFinished`, y
+  reporta `Progress01` (muestra más cercana de la centerline, búsqueda en ventana O(1)).
+  `Tick()` es público para tests deterministas.
+
+### Demo jugable — `unity/Assets/Scripts/Demo/` (asmdef `AgenticRacing.Demo`)
+
+`TrackDemoBootstrap` movido aquí desde `Track/` (un asmdef propio evita el ciclo
+Track↔Vehicle). En `Start` arma la escena en runtime: superficie + `MeshCollider`,
+centerline y racing line como `LineRenderer`, línea de meta, ápices numerados con
+`TextMesh`, **un coche cubo** en la línea, `LapTracker`, cámara ortográfica cenital que
+sigue al coche, y un `OnGUI` temporal con "LAP n / N" (el HUD real es DOM en Fase 4, §2.2).
+Lee `?seed=` y `?laps=`.
+
+`unity/Assets/Editor/Fase1WebglBuild.cs` (`-executeMethod`): crea la escena de un objeto
+(`TrackConfig` + `TrackDemoBootstrap`), build WebGL a `Builds/track-demo` con compresión
+desactivada y rutas relativas para servir desde cualquier estático.
+
+### Verificación
+
+- **EditMode: 19/19** (14 previos + 5 `LapDetectorTests`): una vuelta por bucle, ignora el
+  plano lejos de la meta, no re-cuenta con jitter en la línea, 5 bucles → 5 vueltas,
+  `LapTracker` emite `RaceFinished` en la vuelta objetivo. El job `test-editmode` de CI
+  también los corrió en verde en el push de la iteración 2.
+- **Build WebGL**: `Fase1WebglBuild` tardó 3 intentos por el identificador de template.
+  Unity 6 no tiene `PROJECT:Default` ni `APPLICATION:Base` (la carpeta `Base/` del editor
+  es un include, no un template seleccionable); el valor bueno es `APPLICATION:Default`
+  (el que ya trae `ProjectSettings`). El primer intento lo dejó persistido como
+  `PROJECT:Default` y rompió los siguientes — el script ahora **guarda y restaura** los
+  `PlayerSettings` de WebGL que toca (template, compresión, dataCaching, runInBackground)
+  para no ensuciar `ProjectSettings.asset` (CI conserva Brotli y la ruta `.br`/`.gz` que
+  validó Fase 0). Con `APPLICATION:Default` el build compila (IL2CPP → WASM, ~lento en
+  local).
+
+### Retomar aquí
+
+- Confirmar el build WebGL de `Builds/track-demo` y probarlo en navegador real: el coche
+  se mueve/gira con flechas/WASD, el `OnGUI` muestra "LAP n / N", la consola loguea
+  `[LapTracker] lap n/N`.
+- **Criterio de aceptación de Fase 1**: que el humano conduzca varias vueltas con teclado
+  en 3 seeds nuevas y confirme que la física "se siente". Con eso, marcar PR #2 ready y
+  mergear.
+- Pendiente aparte: el job `build-webgl` de CI del push de la iteración 2 tardó > 50 min
+  (vs ~11 min en Fase 0) — vigilar si es el runner o si el proyecto con URP + más código
+  se volvió así de lento; puede necesitar caché de `Library` más agresiva o un runner
+  más grande.

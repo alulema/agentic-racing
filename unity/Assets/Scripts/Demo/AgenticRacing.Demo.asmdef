@@ -1,0 +1,17 @@
+{
+    "name": "AgenticRacing.Demo",
+    "rootNamespace": "AgenticRacing.Demo",
+    "references": [
+        "AgenticRacing.Track",
+        "AgenticRacing.Vehicle"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
