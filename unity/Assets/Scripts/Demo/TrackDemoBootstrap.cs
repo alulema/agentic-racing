@@ -20,6 +20,7 @@ namespace AgenticRacing.Demo
         [SerializeField] private float cameraSize = 42f;
 
         private Transform _car;
+        private CarController _carController;
         private LapTracker _lapTracker;
         private Camera _cam;
         private TrackData _track;
@@ -67,9 +68,14 @@ namespace AgenticRacing.Demo
                 ? "FINISHED"
                 : $"LAP {Mathf.Min(_lapTracker.CurrentLap, _lapTracker.TotalLaps)} / {_lapTracker.TotalLaps}";
             GUI.Label(new Rect(16, 12, 400, 30), lap, style);
-            GUI.Label(new Rect(16, 40, 400, 24),
-                $"seed {_track.EffectiveSeed}   {_track.Corners.Count} corners   arrows / WASD",
-                new GUIStyle(GUI.skin.label) { fontSize = 13, normal = { textColor = new Color(0.8f, 0.8f, 0.8f) } });
+            var small = new GUIStyle(GUI.skin.label) { fontSize = 13, normal = { textColor = new Color(0.8f, 0.8f, 0.8f) } };
+            GUI.Label(new Rect(16, 40, 500, 24),
+                $"seed {_track.EffectiveSeed}   {_track.Corners.Count} corners   arrows / WASD", small);
+            if (_carController != null)
+            {
+                GUI.Label(new Rect(16, 62, 620, 24),
+                    $"speed {_carController.ForwardSpeed:F1} m/s   {_carController.InputDebug}", small);
+            }
         }
 
         // --- builders --------------------------------------------------------
@@ -191,6 +197,7 @@ namespace AgenticRacing.Demo
             rb.centerOfMass = new Vector3(0f, -0.4f, 0f);
 
             var controller = body.AddComponent<CarController>();
+            _carController = controller;
             _car = body.transform;
 
             // Spawn just ahead of the line so the first crossing is a real lap.

@@ -34,10 +34,18 @@ namespace AgenticRacing.Vehicle
         /// <summary>The parameters in force. Never null after Awake.</summary>
         public VehicleConfig Config => config;
 
+        /// <summary>One-line snapshot of the input state, for an on-screen debug readout.</summary>
+        public string InputDebug { get; private set; } = "(no input yet)";
+
         private void Awake()
         {
             _rb = GetComponent<Rigidbody>();
             if (config == null) config = VehicleConfig.CreateDefault();
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            // Route browser keyboard to the canvas even without an explicit click.
+            WebGLInput.captureAllKeyboardInput = true;
+#endif
 
             _rb.mass = config.Mass;
             _rb.linearDamping = config.LinearDrag;
@@ -65,19 +73,39 @@ namespace AgenticRacing.Vehicle
 
         private void PollKeyboard()
         {
-            var kb = Keyboard.current;
-            if (kb == null) { Throttle = Brake = Steer = 0f; return; }
-
             float t = 0f, s = 0f;
-            if (kb.upArrowKey.isPressed || kb.wKey.isPressed) t += 1f;
-            if (kb.downArrowKey.isPressed || kb.sKey.isPressed) t -= 1f;
-            if (kb.leftArrowKey.isPressed || kb.aKey.isPressed) s -= 1f;
-            if (kb.rightArrowKey.isPressed || kb.dKey.isPressed) s += 1f;
+            bool brakeKey = false;
+            string src;
+
+#if ENABLE_LEGACY_INPUT_MANAGER
+            // The legacy Input Manager's keyboard is reliable in WebGL, unlike the
+            // Input System's keyboard which in Unity 6 WebGL builds often never
+            // receives events. This is the primary path (activeInputHandler=Both).
+            if (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.W)) t += 1f;
+            if (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.S)) t -= 1f;
+            if (Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A)) s -= 1f;
+            if (Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D)) s += 1f;
+            brakeKey = Input.GetKey(KeyCode.Space);
+            src = "legacy";
+#else
+            var kb = Keyboard.current;
+            if (kb != null)
+            {
+                if (kb.upArrowKey.isPressed || kb.wKey.isPressed) t += 1f;
+                if (kb.downArrowKey.isPressed || kb.sKey.isPressed) t -= 1f;
+                if (kb.leftArrowKey.isPressed || kb.aKey.isPressed) s -= 1f;
+                if (kb.rightArrowKey.isPressed || kb.dKey.isPressed) s += 1f;
+                brakeKey = kb.spaceKey.isPressed;
+            }
+            src = kb != null ? "inputsystem" : "none";
+#endif
 
             Steer = s;
             // Down/S brakes while moving forward, otherwise it reverses.
             if (t < 0f && ForwardSpeed > 0.5f) { Brake = 1f; Throttle = 0f; }
-            else { Brake = kb.spaceKey.isPressed ? 1f : 0f; Throttle = t; }
+            else { Brake = brakeKey ? 1f : 0f; Throttle = t; }
+
+            InputDebug = $"src={src}  thr={Throttle:F1}  brk={Brake:F1}  str={Steer:F1}";
         }
 
         private void ApplyDrive(Vector3 fwd, float vFwd)
