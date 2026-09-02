@@ -454,27 +454,55 @@ Unity (frágil, puede que ya no exista el elemento), `game-ci/unity-license-acti
 (automatiza el login web con Playwright; hacky), self-hosted runner, y build local +
 CI-solo-imagen (rompen §2).
 
-### Retomar aquí — próximos pasos, en orden
+### Resolución — `.ulf` cargado y CI verde
 
-1. **(Humano, en Windows)** Unity Hub → login con la cuenta Unity → *Preferences >
-   Licenses* → "Get a free personal license". Copiar `C:\ProgramData\Unity\Unity_lic.ulf`.
-2. **(Humano, en GitHub)** Repo `agentic-racing` → *Settings > Secrets and variables >
-   Actions*:
-   - `UNITY_LICENSE` = contenido completo del `.ulf` (XML, desde `<?xml` al final).
-   - `UNITY_EMAIL` = email de la cuenta Unity.
-   - `UNITY_PASSWORD` = password de la cuenta Unity.
-   (El workflow `build-and-publish.yml` ya referencia los tres.)
-3. **(Humano)** Lanzar el workflow `Build and publish` (push a `main` o `workflow_dispatch`).
-   Primer run: verificar que GameCI activa la licencia y que el build de WebGL con
-   `unityVersion: 6000.3.22f1` compila.
-4. **(Humano, una vez)** Tras el primer push a GHCR: *Package settings* → visibilidad
-   **Public** (la infra efímera lo jala sin credenciales — contrato punto 7).
-5. **(Agente)** Con CI verde: cerrar Fase 0 con PR de `fase-0-risk-spike` → `main`.
-   Describir los 3 hallazgos del spike (BackendType.CPU para Inference Engine en WebGL;
-   `zstd` en el Dockerfile; imagen ~8.3 GB) y enlazar las entradas de este Devlog.
+El dueño generó `Unity_lic.ulf` con Unity Hub en la partición Windows de la NUC y cargó
+los tres secrets (`UNITY_LICENSE` / `UNITY_EMAIL` / `UNITY_PASSWORD`) vía
+`gh secret set`. El `.ulf` es válido (`License id="Terms"`, `StartDate 2026-09-01`).
 
-**Estado de Fase 0**: todo lo que puede hacer el agente está hecho y validado. El único
-pendiente es la cadena licencia Unity → CI verde → GHCR público, que es humano-only.
+**PR de cierre de Fase 0**: [#1](https://github.com/alulema/agentic-racing/pull/1),
+`fase-0-risk-spike` → `main`.
+
+**Ajustes de CI necesarios para que el PR se pudiera verificar** (dos bugs, ambos
+corregidos en la rama):
+
+1. El workflow solo disparaba en `push:main` + `workflow_dispatch`, y `gh workflow run`
+   falla si el archivo no está en la rama por defecto. Se añadió trigger
+   `pull_request → main`; en PR construye la imagen pero **no** hace login ni push a GHCR
+   (`push: false`). La publicación real sigue siendo solo en `push:main` (commit `8c5e503`).
+2. `game-ci/unity-builder` escribe el player en
+   `buildsPath/targetPlatform/buildName`, y `buildName` también default a `WebGL`, así que
+   el player real queda **doble-anidado** en `unity-build-output/WebGL/WebGL/{Build,
+   TemplateData,index.html}`. El workflow subía el nivel de arriba y `Assemble /web static
+   root` fallaba con `cp: cannot stat 'unity-build-output/WebGL/Build'`. Fix: subir el dir
+   interno + `if-no-files-found: error` + ensamblado con `set -euo pipefail` y check
+   explícito (commit `4fa458a`).
+
+**Runs de CI**:
+
+- Run 1 (`8c5e503`): `build-webgl` ✅ **success** — GameCI activa la licencia Personal en
+  CI y compila WebGL con `unityVersion: 6000.3.22f1` (`Build Finished, Result: Success`,
+  ~16.8 MB de player). `build-and-push-image` ❌ por el bug #2 de arriba.
+- Run 2 (`4fa458a`): **ambos jobs ✅**. `build-webgl` ~11 min (pegó al caché de
+  `unity/Library`). `build-and-push-image` ~46 s: en el runner de GitHub el `ollama pull`
+  de 2.0 GB tardó **~10 s** (~200 MB/s, vs ~8 MB/s en la máquina del dueño), la imagen de
+  ~8.3 GB se exportó al store local de buildkit sin problemas de disco, sin push por ser
+  PR.
+
+Con esto, **los tres puntos de riesgo que dependían de CI quedan verificados de forma
+reproducible**: (a) la licencia Unity Personal activa en CI, (b) el WebGL compila en CI,
+(c) la imagen Docker arma en CI con el WebGL mergeado.
+
+### Retomar aquí — lo único que queda de Fase 0 (humano-only, post-merge)
+
+1. **Mergear el PR #1 a `main`.** Eso dispara el run con `push:main` → `docker login` +
+   `push: true` → primera imagen a `ghcr.io/alulema/agentic-racing`.
+2. **Marcar el paquete GHCR como Público** (*Packages → agentic-racing → Package settings
+   → Change visibility → Public*). La infra efímera lo jala sin credenciales (contrato
+   punto 7).
+
+**Estado de Fase 0**: todo lo verificable por el agente está hecho y verde en CI. Solo
+resta merge + push inicial a GHCR + visibilidad pública, que es humano-only.
 
 **Para Fase 5 (anotado para no perderlo)**:
 - Adelgazar la imagen: quitar libs GPU del runtime de Ollama (`rocm`, CUDA) — el pod es

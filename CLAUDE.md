@@ -265,8 +265,10 @@ No empieces por el juego. Valida primero lo que puede matar el proyecto.
 - [x] FastAPI sirve ese build con los **headers correctos para archivos `.br`/`.gz`** de
       Unity, en `0.0.0.0:8080` — `Content-Encoding` + `Content-Type` verificados por `curl`
       y en navegador
-- [ ] La imagen se publica a **GHCR como paquete público** desde CI — workflow escrito, sin
-      correr (bloqueado por secret `UNITY_LICENSE`, humano-only)
+- [~] La imagen se publica a **GHCR como paquete público** desde CI — CI verde en el PR de
+      Fase 0 (run 2 de #1, 2026-09-02): GameCI activa la licencia Personal, compila WebGL
+      6000.3.22f1, y arma la imagen. Falta solo lo humano-only post-merge: mergear #1 →
+      primer `push:main` publica a GHCR → marcar el paquete **Público**. Ver `docs/Devlog.md`
 - [x] `docker run -p 8080:8080 -e PROJECT_ID=agentic-racing -e DEMO_SLOT=demo01` funciona
       localmente — es la prueba que el contrato define como suficiente
 - [x] Un modelo ONNX de juguete (red densa trivial, 3 inputs → 2 outputs) carga con
