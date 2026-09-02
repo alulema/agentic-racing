@@ -74,13 +74,43 @@ namespace AgenticRacing.Demo
 
         // --- builders --------------------------------------------------------
 
+        private static Shader _colorShader;
+
+        /// <summary>
+        /// A material that shows a solid colour. Runtime <c>Shader.Find</c> for
+        /// URP/Unlit can fail in a player (nothing references it at build time so
+        /// it is stripped), so the reliable source is the shader a primitive's
+        /// default material already uses — that one is always in the build, is
+        /// opaque and writes depth. URP/Unlit is only a nicety if present.
+        /// </summary>
         private static Material UnlitColor(Color c)
         {
-            var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
-            var m = new Material(shader);
+            if (_colorShader == null)
+            {
+                _colorShader = Shader.Find("Universal Render Pipeline/Unlit")
+                               ?? Shader.Find("Unlit/Color");
+            }
+            if (_colorShader == null)
+            {
+                var probe = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                _colorShader = probe.GetComponent<MeshRenderer>().sharedMaterial.shader;
+                Destroy(probe);
+            }
+
+            var m = new Material(_colorShader);
             if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
             if (m.HasProperty("_Color")) m.SetColor("_Color", c);
+            m.color = c;
             return m;
+        }
+
+        private static void Tint(GameObject primitive, Color c)
+        {
+            var mr = primitive.GetComponent<MeshRenderer>();
+            var m = mr.material;                 // instance, not the shared default
+            if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
+            if (m.HasProperty("_Color")) m.SetColor("_Color", c);
+            m.color = c;
         }
 
         private void BuildSurface(TrackData track)
@@ -89,7 +119,7 @@ namespace AgenticRacing.Demo
             go.transform.SetParent(transform, false);
             var mesh = TrackMeshBuilder.Build(track);
             go.AddComponent<MeshFilter>().sharedMesh = mesh;
-            go.AddComponent<MeshRenderer>().sharedMaterial = UnlitColor(new Color(0.16f, 0.17f, 0.19f));
+            go.AddComponent<MeshRenderer>().sharedMaterial = UnlitColor(new Color(0.18f, 0.19f, 0.22f));
             go.AddComponent<MeshCollider>().sharedMesh = mesh;
         }
 
@@ -134,10 +164,9 @@ namespace AgenticRacing.Demo
                 dot.transform.localScale = Vector3.one * 3.5f;
                 var col = dot.GetComponent<Collider>();
                 if (col != null) Destroy(col);
-                dot.GetComponent<MeshRenderer>().sharedMaterial = UnlitColor(
-                    corner.Direction == CornerDirection.Left
-                        ? new Color(0.85f, 0.40f, 0.85f)
-                        : new Color(0.90f, 0.35f, 0.35f));
+                Tint(dot, corner.Direction == CornerDirection.Left
+                    ? new Color(0.85f, 0.40f, 0.85f)
+                    : new Color(0.90f, 0.35f, 0.35f));
 
                 var textGo = new GameObject($"T{corner.Index}");
                 textGo.transform.SetParent(transform, false);
@@ -158,7 +187,7 @@ namespace AgenticRacing.Demo
             body.name = "Car";
             body.transform.SetParent(transform, false);
             body.transform.localScale = new Vector3(2.0f, 0.8f, 4.2f);
-            body.GetComponent<MeshRenderer>().sharedMaterial = UnlitColor(new Color(0.90f, 0.75f, 0.20f));
+            Tint(body, new Color(0.95f, 0.78f, 0.15f));
 
             var rb = body.AddComponent<Rigidbody>();
             rb.centerOfMass = new Vector3(0f, -0.4f, 0f);

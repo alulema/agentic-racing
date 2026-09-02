@@ -25,7 +25,9 @@ namespace AgenticRacing.Track
             var vertices = new Vector3[n * 2];
             var normals = new Vector3[n * 2];
             var uv = new Vector2[n * 2];
+            var colors = new Color32[n * 2];
             var triangles = new int[n * 6];
+            var white = new Color32(255, 255, 255, 255);
 
             float arc = 0f;
             for (int i = 0; i < n; i++)
@@ -50,6 +52,8 @@ namespace AgenticRacing.Track
                 float v = arc / uvTileLength;
                 uv[l] = new Vector2(0f, v);
                 uv[r] = new Vector2(1f, v);
+                colors[l] = white;
+                colors[r] = white;
 
                 arc += Vector3.Distance(curr, next);
 
@@ -72,6 +76,7 @@ namespace AgenticRacing.Track
             mesh.vertices = vertices;
             mesh.normals = normals;
             mesh.uv = uv;
+            mesh.colors32 = colors;
             mesh.triangles = triangles;
             mesh.RecalculateBounds();
             return mesh;
