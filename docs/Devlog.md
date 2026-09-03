@@ -913,3 +913,17 @@ NamedBuildTarget.Standalone, ScriptingImplementation.IL2CPP)` antes de `BuildPla
 paquetes de toolchain de Linux (`com.unity.toolchain.linux-x86_64-linux`,
 `com.unity.sysroot.base`, `com.unity.sdk.linux-x86_64`) ya estaban resueltos, así que la
 cross-compilación IL2CPP Windows→Linux tiene todo lo que necesita. Commit `1f397ee`.
+
+### Tercer bug — falta el toolchain de cross-compilación win→linux (2026-09-03)
+
+Segundo intento en la NUC (`build.log`, 826 KB — IL2CPP sí arrancó esta vez): el player
+falló en el post-proceso con `No Toolchain found for host platform. Please install package
+'com.unity.toolchain.win-x86_64-linux'` / `Unable to find an Linux Sysroot` /
+`Internal build system error. BuildProgram exited with code 1`. El repo se preparó en Linux,
+así que el manifest traía `com.unity.toolchain.linux-x86_64-linux` (host Linux → target
+Linux) pero no el equivalente para host Windows. Fix: agregar
+`com.unity.toolchain.win-x86_64-linux@1.1.0` a `unity/Packages/manifest.json` (y a
+`packages-lock.json`) — misma versión que el resto de la familia, marcada `unity: 6000.3`,
+y trae el sysroot Linux dentro del paquete. Los dos toolchains conviven; el editor elige el
+que corresponde al SO del host, así que la build sigue funcionando desde Linux (CI, mi
+máquina) y ahora también desde la NUC Windows.
