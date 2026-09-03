@@ -13,6 +13,9 @@
 sysinfo.txt
 *.stackdump
 
+# Editor batchmode build logs dropped at the repo root for triage
+/build.log
+
 # Visual Studio / Rider / VS Code cache for Unity
 .vs/
 .vsconfig

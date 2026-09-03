@@ -35,6 +35,11 @@ namespace AgenticRacing.EditorTools
             // EditorUserBuildSettings and needs the Dedicated Server module.
             EditorUserBuildSettings.standaloneBuildSubtarget = StandaloneBuildSubtarget.Player;
 
+            // Force IL2CPP for Standalone: the project default is Mono, and the
+            // training NUC only has "Linux Build Support (IL2CPP)" installed (§9),
+            // so a Mono Linux player cannot be built there.
+            PlayerSettings.SetScriptingBackend(NamedBuildTarget.Standalone, ScriptingImplementation.IL2CPP);
+
             if (Directory.Exists(OutputDir)) Directory.Delete(OutputDir, true);
             Directory.CreateDirectory(OutputDir);
 
