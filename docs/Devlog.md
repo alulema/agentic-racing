@@ -901,3 +901,15 @@ Construir el player en máquina con licencia → subir a la VM spot → `mlagent
 devolver `RaceAgent.onnx` + logs de TensorBoard + run-id + nº de pasos + commit. La
 iteración 2 de Fase 2 (análisis de curvas, tuneo de recompensas, validación del `.onnx` en
 WebGL) empieza cuando eso vuelva.
+
+### Segundo bug del build de entrenamiento (2026-09-03)
+
+Primer intento en la NUC (`build.log`): la licencia Personal activó bien y los scripts
+compilaron, pero `BuildPlayer` falló con `Currently selected scripting backend (Mono) is
+not installed`. El proyecto trae el backend de Standalone en Mono (default de Unity) y la
+NUC solo tiene "Linux Build Support (IL2CPP)" instalado — que es exactamente lo que pide
+§9. Fix: `Fase2TrainingBuild` fuerza `PlayerSettings.SetScriptingBackend(
+NamedBuildTarget.Standalone, ScriptingImplementation.IL2CPP)` antes de `BuildPlayer`. Los
+paquetes de toolchain de Linux (`com.unity.toolchain.linux-x86_64-linux`,
+`com.unity.sysroot.base`, `com.unity.sdk.linux-x86_64`) ya estaban resueltos, así que la
+cross-compilación IL2CPP Windows→Linux tiene todo lo que necesita. Commit `1f397ee`.
