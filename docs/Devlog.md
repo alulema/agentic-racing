@@ -927,3 +927,26 @@ Linux) pero no el equivalente para host Windows. Fix: agregar
 y trae el sysroot Linux dentro del paquete. Los dos toolchains conviven; el editor elige el
 que corresponde al SO del host, así que la build sigue funcionando desde Linux (CI, mi
 máquina) y ahora también desde la NUC Windows.
+
+### Build de entrenamiento OK en la NUC (2026-09-03)
+
+Tercer intento en la NUC a `HEAD = 21ab188`: `result=Succeeded`. El humano copió
+`unity/Builds/train-linux/` de vuelta al repo (ignorado por `.gitignore`, no se commitea).
+Contenido verificado: ELF x86-64 IL2CPP (`GameAssembly.so` 112 MB, `il2cpp_data/`),
+`UnityPlayer.so`, y el runtime de ML-Agents horneado —
+`Unity.ML-Agents.dll`, `Grpc.Core.dll`, `Plugins/AnyCPU/libgrpc_csharp_ext.x64.so`,
+más `AgenticRacing.{Agents,Track,Vehicle,Demo}.dll`. Es un player headless válido para
+`mlagents-learn --env=`.
+
+Resumen de los tres bugs de este build (todos por construir desde host Windows con solo
+los módulos de §9): (1) subtarget `Server` persistido → forzar `Player`; (2) backend
+Standalone en Mono → forzar IL2CPP; (3) faltaba el toolchain `win-x86_64-linux` en el
+manifest (el repo se preparó en Linux). Ninguno lo puede atrapar CI, que solo compila
+WebGL en Linux y nunca hace un player Windows→Linux.
+
+**Siguiente, humano (§8)**: subir `train-linux/` a la VM spot de Azure (~16 vCPU, Ubuntu),
+`chmod +x train.x86_64`, venv Python con `mlagents==1.1.0`, y
+`mlagents-learn training/config/race_ppo.yaml --env=Builds/train-linux/train.x86_64
+--no-graphics --num-envs=4 --run-id=race01` en tmux (`--resume` tras desalojo). Devolver
+`results/race01/` (con `RaceAgent.onnx` + `events.out.tfevents.*`), run-id, nº de pasos y
+el commit del player (`21ab188`). Con eso arranca la iteración 2 de Fase 2.
