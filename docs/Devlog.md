@@ -950,3 +950,56 @@ WebGL en Linux y nunca hace un player Windows→Linux.
 --no-graphics --num-envs=4 --run-id=race01` en tmux (`--resume` tras desalojo). Devolver
 `results/race01/` (con `RaceAgent.onnx` + `events.out.tfevents.*`), run-id, nº de pasos y
 el commit del player (`21ab188`). Con eso arranca la iteración 2 de Fase 2.
+
+### Provisión de la VM de entrenamiento en Azure (2026-09-03/04)
+
+**Cuota**: una suscripción nueva trae `Total Regional Spot vCPUs` (el nombre interno que usa
+la API/CLI es `lowPriorityCores`, el portal lo muestra como "Spot vCPUs") en 3 por región —
+insuficiente para 16 vCPU. La extensión `az quota` dio problemas (provider `Microsoft.Quota`
+sin registrar, throttling de 3600 s, nombres de subcomando que cambian entre versiones). Lo
+que sí funcionó: portal → **Quotas** → Compute → filtrar por el grupo **"Spot"** → única
+opción **"Spot vCPUs"** → New quota request → nuevo límite. Se resolvió solo (sin ticket de
+soporte) en unos minutos. Verificar el resultado con `az vm list-usage -l <region> -o table`
+(no con `az quota show`, que depende del provider problemático) — la fila se llama
+`Total Regional Low-priority vCPUs`.
+
+**Capacidad**: además de cuota, el tamaño concreto (`Standard_F16s_v2`) puede no tener
+capacidad spot en una región en un momento dado (`SkuNotAvailable`) — probar otra región o
+`--zone`, no es un problema de configuración.
+
+**Bug de la Unity CLI en `az`**: los errores de `az vm create` para plantillas ARM salen con
+un traceback de Python roto (`RequestThrottled`/`RuntimeError: The content for this response
+was already consumed`) que oculta el mensaje real de Azure — hay que leer el bloque
+`Exception Details` más arriba en el mismo output, no el traceback final.
+
+### SIGSEGV del player headless en la VM — `GfxDevice: Null` + Xvfb (2026-09-03/04)
+
+Con el player subido y `mlagents-learn` instalado, el entorno crasheaba con
+`UnityEnvironmentException: Environment shut down with return code -11 (SIGSEGV)` en cuanto
+`mlagents-learn` intentaba levantar el primer entorno — sin más detalle, porque mlagents solo
+reporta el exit code, no el log de Unity. Diagnóstico: correr el binario suelto con
+`./train.x86_64 -batchmode -nographics -logFile -` sí imprime el log completo de Unity, y el
+crash cae justo después de `Registered Communicator in Agent.`, durante el registro del
+`Agent`/comunicador de ML-Agents — no en nuestro código (`TrainingArena`/`RaceAgent` son
+observación vectorial + raycasts puros, sin cámaras ni RenderTexture).
+
+Se probó primero una pista falsa: el log también mostraba una `DllNotFoundException` de
+`libAppUINativePlugin.so` por falta de `libgtk-3.so.0` (paquete `Unity.AppUI`, ligado
+probablemente por `com.unity.ai.inference`, sin relación con la escena de entrenamiento).
+Instalar `libgtk-3-0` quitó esa excepción pero el SIGSEGV siguió idéntico — no era la causa.
+
+**Causa real y fix**: `-nographics` fuerza `GfxDevice: Null`, una ruta de código con historial
+de segfaults en builds Linux headless de Unity 6 combinados con el registro de Agent/comunicador
+de ML-Agents. El fix es darle un framebuffer real por software en vez del device Null:
+
+```bash
+sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils
+xvfb-run -a mlagents-learn training/config/race_ppo.yaml \
+  --env=Builds/train-linux/train.x86_64 --num-envs=4 --run-id=race01
+# nota: SIN --no-graphics — xvfb-run cumple esa función
+```
+
+Un solo `xvfb-run` alcanza para todos los `--num-envs`, porque `mlagents-learn` lanza los
+subprocesos del player heredando el mismo `$DISPLAY`. Aplica esta nota a cualquier VM de
+entrenamiento futura (incluida una reprovisión tras desalojo spot): **siempre** envolver
+`mlagents-learn` en `xvfb-run -a` y nunca pasar `--no-graphics` en este proyecto.

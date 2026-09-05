@@ -38,8 +38,9 @@ En una máquina con el Editor:
 ```
 
 Sube `unity/Builds/train-linux/` entero a la VM. `chmod +x train.x86_64`. Es un
-player normal; se corre headless con `--no-graphics` (ver abajo). No hace falta
-el módulo "Dedicated Server", sólo "Linux Build Support (IL2CPP)" (§9).
+player normal; se corre headless con `xvfb-run` (ver abajo, **no** con
+`--no-graphics`). No hace falta el módulo "Dedicated Server", sólo "Linux Build
+Support (IL2CPP)" (§9).
 
 La escena que construye es una rejilla de `TrainingArena` (por defecto 9), cada
 una con una seed de circuito distinta (`baseSeed + índice`), separadas 4 km para
@@ -47,13 +48,24 @@ que los raycasts no vean arenas vecinas.
 
 ## 2. Lanzar el entrenamiento en la VM
 
+⚠️ **No uses `--no-graphics`.** Ese flag fuerza `GfxDevice: Null` en el player, y esa
+ruta de Unity 6 en Linux headless crashea con `SIGSEGV` justo al registrar el primer
+`Agent`/comunicador de ML-Agents (visto en la corrida real, VM Azure, 2026-09-04) — no
+es un problema del código del proyecto. El fix es darle un framebuffer real por
+software con `xvfb-run` en su lugar:
+
 ```bash
+sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils   # una sola vez por VM
+
 source .venv/bin/activate
-mlagents-learn training/config/race_ppo.yaml \
-  --env=Builds/train-linux/train.x86_64 --no-graphics \
+xvfb-run -a mlagents-learn training/config/race_ppo.yaml \
+  --env=Builds/train-linux/train.x86_64 \
   --num-envs=4 \
   --run-id=race01
 ```
+
+Un solo `xvfb-run` alcanza para todos los `--num-envs`: `mlagents-learn` lanza los
+subprocesos del player heredando el mismo `$DISPLAY` virtual.
 
 - `--num-envs=N` levanta N procesos del player; con 9 arenas por proceso son
   ~36 agentes en paralelo alimentando una sola política. Ajustar N al nº de
