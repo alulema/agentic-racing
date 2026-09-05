@@ -1052,3 +1052,47 @@ ese — el build de WebGL del demo sigue en IL2CPP sin cambios) use Mono en vez 
 IL2CPP. El forzado a IL2CPP de `1f397ee` fue, en retrospectiva, el fix equivocado para el
 primer bug de esta saga ("Mono no instalado") — la solución correcta era instalar el módulo
 Mono en la máquina de build, no forzar IL2CPP.
+
+### Giro final: el player de entrenamiento pasa a Windows/Mono, no Linux (2026-09-04)
+
+Al revisar qué módulo instalar, la CLI de Unity Hub (`unityhub --headless install-modules
+--version 6000.3.22f1`) reveló que **"Linux Build Support (Mono)" ya no existe** — Unity 6
+eliminó el scripting backend Mono para el target Linux Standalone; hoy Linux solo ofrece
+IL2CPP. Como el bug de la entrada anterior (`Grpc.Core` + IL2CPP) es insalvable, un player
+de entrenamiento **Linux** queda descartado por completo con esta versión de Unity, sin
+importar el backend. La CLI sí lista `windows-mono` ("Windows Build Support (Mono)"), así
+que — consultado y confirmado con el dueño del proyecto — el player de entrenamiento pasa a
+**Windows Standalone + Mono**, corrido en la partición Windows de la NUC (o una VM Windows si
+hiciera falta más cómputo más adelante). El WebGL del demo no cambia: sigue en IL2CPP porque
+WebGL lo exige de todas formas, y no usa el comunicador de ML-Agents.
+
+Cambios:
+- `Fase2TrainingBuild.cs`: target `StandaloneWindows64`, `ScriptingImplementation.Mono2x`
+  (ya no `IL2CPP`), salida `Builds/train-windows/train.exe`. Además, copia automáticamente
+  `grpc_csharp_ext.x64.dll` junto al `.exe` tras el build — mismo bug de ubicación del
+  plugin nativo que en Linux (ver entrada anterior), confirmado también en la variante
+  Windows del paquete (`Library/PackageCache/com.unity.ml-agents@.../Plugins/ProtoBuffer/
+  runtimes/win/native/grpc_csharp_ext.x64.dll`).
+- CLAUDE.md §9: el módulo requerido pasa de "Linux Build Support (IL2CPP)" a "Windows Build
+  Support (Mono)", con la explicación completa inline. §2.3 actualizada para no asumir Linux.
+- `training/README.md`: instrucciones reescritas para Windows — ya no hace falta `Xvfb`
+  (un `.exe` de Windows no necesita framebuffer virtual para correr headless, basta
+  `-batchmode`), y se documenta el rango exacto de Python que exige `mlagents==1.1.0`
+  (`>=3.10.1,<=3.10.12` — un `conda create python=3.10` sin fijar el patch puede darte una
+  versión fuera de rango y fallar la instalación, como pasó esta noche).
+
+Pendiente para la próxima sesión: instalar `windows-mono` en el Editor de la partición
+Windows de la NUC (`unityhub --headless install-modules --version 6000.3.22f1 -m
+windows-mono` — la sintaxis exacta de invocación de Hub varía por SO, en Windows lleva
+`-- --headless` por ser una app Electron), reconstruir con el script actualizado, y
+verificar que `mlagents-learn --env=Builds/train-windows/train.exe --num-envs=1` conecta
+sin el `UnityTimeOutException` que bloqueó toda la sesión de hoy.
+
+Pendiente de limpieza no urgente: `unity/Packages/manifest.json` y `packages-lock.json`
+todavía traen los tres paquetes de toolchain de cross-compilación IL2CPP Linux
+(`com.unity.sdk.linux-x86_64`, `com.unity.toolchain.linux-x86_64-linux`,
+`com.unity.toolchain.win-x86_64-linux`) agregados en `21ab188`/commits previos — ya no hacen
+falta porque el player de entrenamiento no se construye más para Linux. No estorban (UPM
+simplemente no los usa), así que se puede posponer su remoción hasta que se abra el Editor
+y se pueda dejar que resuelva el manifest de nuevo sin arriesgar un lock file inconsistente
+editado a mano.
