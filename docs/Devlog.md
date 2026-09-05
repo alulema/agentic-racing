@@ -1003,3 +1003,52 @@ Un solo `xvfb-run` alcanza para todos los `--num-envs`, porque `mlagents-learn` 
 subprocesos del player heredando el mismo `$DISPLAY`. Aplica esta nota a cualquier VM de
 entrenamiento futura (incluida una reprovisión tras desalojo spot): **siempre** envolver
 `mlagents-learn` en `xvfb-run -a` y nunca pasar `--no-graphics` en este proyecto.
+
+### `UnityTimeOutException` tras arreglar el SIGSEGV — dos bugs más, y uno es de fondo (2026-09-04)
+
+Con el SIGSEGV resuelto, `mlagents-learn` seguía sin conectar: el player arrancaba (confirmado
+por `strace -f -e trace=execve,exit_group`: el `execve` del binario ocurre y devuelve 0) pero
+Python nunca recibía el handshake y terminaba en `UnityTimeOutException` tras matarlo con
+`SIGKILL` — sin crash, sin nada en `/var/crash` ni en `dmesg` (Ubuntu no loguea segfaults ahí
+por defecto, `kernel.print-fatal-signals=0`; esa pista llevó a un callejón sin salida).
+Se descartó contaminación de intentos previos (sin procesos huérfanos, puerto 5005 libre) y se
+reprodujo **idéntico en la NUC local** (Ubuntu 26.04, conda con Python 3.10.12 pinneado — 
+`mlagents==1.1.0` exige `Python >=3.10.1,<=3.10.12` exacto, no sirve cualquier 3.10.x), lo que
+confirmó que no era un problema de la VM de Azure sino un bug real del proyecto/build.
+
+Sin `-logFile -` a mano, `mlagents-learn` sí pasa su propio `-logFile` apuntando a
+`results/<run-id>/run_logs/Player-0.log` — ahí apareció el error real, dos capas:
+
+1. **El plugin nativo de gRPC no está donde `Grpc.Core` lo busca.** Unity empaqueta
+   `libgrpc_csharp_ext.x64.so` en `train_Data/Plugins/AnyCPU/`, pero el wrapper `Grpc.Core`
+   (empaquetado dentro de ML-Agents) lo busca con rutas de paquete NuGet genérico:
+   junto al ejecutable, en `runtimes/linux/native/`, o en `../Plugins/x86_64/` relativos al
+   ejecutable — ninguna coincide con `AnyCPU/`. Sin la librería, cae a
+   `FileNotFoundException` → "Couldn't connect to trainer ... Will perform inference instead."
+   **Fix, después de cada build**: copiar el `.so` junto al ejecutable:
+   ```bash
+   cp train_Data/Plugins/AnyCPU/libgrpc_csharp_ext.x64.so ./libgrpc_csharp_ext.x64.so
+   ```
+   (mismo directorio que `train.x86_64`). Aplica sin importar el scripting backend.
+
+2. **IL2CPP no es compatible con el comunicador gRPC de ML-Agents — bug de fondo, no de
+   nuestro código.** Con el `.so` en su lugar, el error cambia a:
+   ```
+   System.NotSupportedException: To marshal a managed method, please add an attribute named
+   'MonoPInvokeCallback' to the method definition. The method we're attempting to marshal is:
+   Grpc.Core.Internal.NativeLogRedirector::HandleWrite
+   ```
+   Es una limitación conocida de `Grpc.Core` bajo IL2CPP: IL2CPP compila todo AOT y no puede
+   generar en runtime el trampolín nativo para ese callback, cosa que Mono sí hace vía JIT.
+   Unity documenta que el **player de entrenamiento de ML-Agents debe usar el scripting
+   backend Mono** — IL2CPP solo está soportado para *inferencia* (`com.unity.ai.inference`,
+   que es lo que corre el WebGL del demo), no para el canal de entrenamiento. Esto contradice
+   directamente CLAUDE.md §9 ("Linux Build Support (IL2CPP)... Ningún otro"), así que se
+   consultó al dueño del proyecto antes de tocarlo en vez de decidir unilateralmente (§12).
+
+**Estado al cierre de la sesión**: pendiente la decisión de instalar también "Linux Build
+Support (Mono)" y ajustar `Fase2TrainingBuild.cs` para que el player de entrenamiento (solo
+ese — el build de WebGL del demo sigue en IL2CPP sin cambios) use Mono en vez de forzar
+IL2CPP. El forzado a IL2CPP de `1f397ee` fue, en retrospectiva, el fix equivocado para el
+primer bug de esta saga ("Mono no instalado") — la solución correcta era instalar el módulo
+Mono en la máquina de build, no forzar IL2CPP.
