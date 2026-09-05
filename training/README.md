@@ -12,17 +12,35 @@ devuelve el `.onnx` + los logs.
 | Editor Unity | `6000.3.22f1` |
 | `com.unity.ml-agents` (paquete Unity) | `4.0.3` |
 | `mlagents` (Python) | **del mismo release** que el paquete Unity (release 4). Si Unity y Python se desincronizan, falla con errores raros de gRPC. |
-| Python | `mlagents==1.1.0` exige **exactamente** `>=3.10.1,<=3.10.12` — no cualquier 3.10.x. Un `conda create -n ... python=3.10` puede darte un patch fuera de rango (p.ej. 3.10.21) y `pip install mlagents` falla con "no matching distribution". Fija el patch: `python=3.10.12`. |
+| Python | `mlagents==1.1.0` exige **exactamente** `>=3.10.1,<=3.10.12` — no cualquier 3.10.x (un gestor que solo deja elegir `3.10` sin fijar el patch puede darte, por ejemplo, `3.10.21`, fuera de rango, y `pip install mlagents` falla con "no matching distribution"). |
 
-Instalación del lado Python (ejemplo con conda, funciona igual en la VM que en la
-máquina de entrenamiento local):
+**Preferir `venv` sobre `conda`** para el entorno de Python de entrenamiento — instala un
+Python **3.10.12** exacto (desde [python.org](https://www.python.org/downloads/release/python-31012/)
+en Windows, o vía `pyenv`/deadsnakes en Linux) y arma el venv directo con ese intérprete:
 
-```bash
-conda create -n agentic-racing-train python=3.10.12 -y
-conda activate agentic-racing-train
+```powershell
+# Windows, con el 3.10.12 de python.org instalado (o `py -3.10-64` si el launcher lo resuelve así)
+py -3.10 -m venv .venv
+.venv\Scripts\activate
 pip install "setuptools<81"   # mlagents usa pkg_resources, retirado de setuptools 81+
 pip install mlagents==1.1.0
 mlagents-learn --help    # comprobar que arranca
+```
+
+```bash
+# Linux/macOS, con python3.10 (3.10.12) ya instalado
+python3.10 -m venv .venv && source .venv/bin/activate
+pip install "setuptools<81"
+pip install mlagents==1.1.0
+mlagents-learn --help
+```
+
+Solo si el sistema no trae ningún Python 3.10.x instalable fácilmente (pasó en la NUC:
+Ubuntu 26.04 solo trae 3.13/3.14 por `apt`, sin `python3.10` disponible ni en universe), usar
+`conda` como fallback, fijando el patch exacto:
+
+```bash
+conda create -n agentic-racing-train python=3.10.12 -y && conda activate agentic-racing-train
 ```
 
 ## 1. Construir el player headless de Windows
@@ -66,11 +84,11 @@ A diferencia de Linux, un player Windows normal no necesita `Xvfb` ni ningún
 framebuffer virtual para correr headless — `-batchmode` (que ya trae por defecto la
 `UnityEnvironment` de Python) es suficiente.
 
-```bash
-conda activate agentic-racing-train
-mlagents-learn training/config/race_ppo.yaml \
-  --env=Builds/train-windows/train.exe \
-  --num-envs=4 \
+```powershell
+.venv\Scripts\activate      # o `conda activate agentic-racing-train` si usaste el fallback
+mlagents-learn training/config/race_ppo.yaml `
+  --env=Builds/train-windows/train.exe `
+  --num-envs=4 `
   --run-id=race01
 ```
 
