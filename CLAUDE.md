@@ -872,6 +872,13 @@ exactamente con la imagen de GameCI en CI.
 
 ## 12. Cómo trabajar conmigo
 
+- **Al retomar una sesión** (nueva ventana, nueva máquina — incluida la partición Windows de
+  la NUC, que es un directorio de proyecto distinto para Claude Code y no comparte memoria
+  con la sesión Linux): lee **las últimas entradas de `docs/Devlog.md`** antes de hacer nada.
+  Ahí queda el punto exacto donde se cerró la sesión anterior, qué se probó, qué falló, y qué
+  sigue. No asumas que el código o los scripts hacen lo que su nombre sugiere sin verificar
+  contra el Devlog — varias decisiones de este documento (§2.3, §9) se revisaron a mitad de
+  proyecto y el Devlog es la fuente de verdad de *por qué*.
 - Antes de cada fase, propón un plan corto y espera confirmación.
 - Un PR por fase. No mezcles fases.
 - Si el build de CI falla, lee el log y corrige — no pidas ayuda hasta haberlo intentado.
