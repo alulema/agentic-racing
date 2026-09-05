@@ -827,3 +827,272 @@ tests y por una prueba de conducción humana en el navegador.
 El job `build-webgl` de CI del push de la iteración 2 tardó > 50 min (vs ~11 min en Fase 0)
 — vigilar si es el runner o si el proyecto con URP + más código se volvió así de lento;
 puede necesitar caché de `Library` más agresiva o un runner más grande.
+
+---
+
+## 2026-09-02 — Fase 2 · Iteración 1: agente RL, observaciones (con canales de directiva), setup de entrenamiento
+
+Código preparado; el entrenamiento en sí lo lanza el humano en la VM (§8). Rama
+`fase-2-rl-agente`, PR #3 (draft).
+
+### Decisiones tomadas al abrir la fase (aprobadas)
+
+- **Raycasts vía `RayPerceptionSensorComponent3D`** de ML-Agents contra muros de borde
+  invisibles (`TrackEdgeColliders`), detectando por tag `TrackEdge`. No se escriben los
+  hits a mano en el vector de observación: el sensor los añade aparte.
+- **Codificación de la directiva** (§6.1) = `aggression` (1 float 0..1) + `risk_tolerance`
+  (1 float 0..1) + `directive` one-hot de 4 (`attack/defend/conserve/push`) = **6 floats**,
+  aleatorizados cada episodio con niveles discretos `{0.15, 0.5, 0.85}` para los escalares
+  (§6.4: niveles discretos, no continuo). `RaceDirective.RandomEpisode`.
+- **Reset de episodio** = spawn en un punto de arco aleatorio del circuito, con ruido de
+  rumbo (±10°) y lateral (±2 m). Un episodio = una vuelta (§2.1): termina al completar
+  `Length * 0.99` de avance, salirse, atascarse, ir al revés, o timeout (`MaxStep = 4000`).
+
+### Qué se implementó — `unity/Assets/Scripts/Agents/` (asmdef `AgenticRacing.Agents`)
+
+- **`RaceDirective`** — struct con los 3 canales + `ObservationSize = 6`, `Neutral`, y
+  `RandomEpisode(System.Random)`. Es la única superficie que el estratega de Fase 4
+  escribirá (§6.8).
+- **`RaceAgent : Agent`** — `[RequireComponent]` de `CarController` + `Rigidbody`.
+  Observación vectorial de **12 floats**: velocidad longitudinal y lateral (norm.),
+  error de rumbo vs tangente de la racing line, offset lateral del coche y de la racing
+  line respecto a centerline (clamp ±2), progreso 0..1, y los **6 canales de directiva**.
+  Acciones continuas `[steer, throttle, brake]`. Recompensa: progreso por metro
+  (`ConsumeForwardDelta`, wrap-aware), castigo por frame (empuja a ir rápido), castigo por
+  rozar/salir del borde, por atascarse, por ir al revés, bonus al cerrar la vuelta. Todos
+  los pesos serializados para tunear entre corridas sin recompilar.
+- **`TrainingArena`** — arena autocontenida: genera su circuito (seed propia), construye
+  los muros de borde, y crea un coche con `RaceAgent` + `BehaviorParameters`
+  (`RaceAgent`, obs 12, 3 acciones continuas) + `DecisionRequester` (periodo 5) + el ray
+  sensor (9 rayos, 75°, 40 m). Todo en `Awake`, sin cablear escena. El coche va a la capa
+  *Ignore Raycast* para que el sensor (origen dentro del `BoxCollider`) no se detecte a sí
+  mismo; la colisión física con los muros sigue por la matriz de colisión.
+- **`TrainingSceneBootstrap`** — rejilla de 9 arenas, seeds `1000+i`, separadas 4 km para
+  que un ray sensor no vea la arena vecina.
+
+### Build de entrenamiento — `Fase2TrainingBuild` (editor script)
+
+Construye `Assets/Scenes/TrainArena.unity` (un objeto: `TrainingSceneBootstrap`) a un
+**player `StandaloneLinux64` normal**, no un Dedicated Server. Bug encontrado: el subtarget
+`Server` necesita el módulo "Dedicated Server" que §9 no pide instalar, y el valor `Server`
+quedaba persistido en `EditorUserBuildSettings`; el script ahora fuerza
+`StandaloneBuildSubtarget.Player` explícitamente. Verificado en local: genera
+`train.x86_64` (149 MB) que la VM corre headless con `--no-graphics`.
+
+### Config PPO — `training/config/race_ppo.yaml`
+
+Behavior `RaceAgent`, `batch_size` 2048 / `buffer_size` 20480, lr 3e-4 linear, red MLP
+`hidden_units` 256 × 2 capas (§2.3: MLP pequeño), `normalize: true`, `gamma` 0.995,
+`max_steps` 20M, `checkpoint_interval` 500k (para `--resume` en spot). `training/README.md`
+tiene el procedimiento completo: construir el player, subirlo, `mlagents-learn --env=...
+--num-envs=4 --run-id=race01`, TensorBoard, y qué devolver al agente.
+
+### Verificación
+
+- Compila con ML-Agents 4.0.3 (Sentis 2.6.1, sin conflicto — §9). EditMode 20/20.
+- `Fase2TrainingBuild` produce el player Linux headless (build local, `result=Succeeded`,
+  149 MB).
+- CI de PR #3: `test-editmode` verde; `build-webgl` (confirma que el código que depende de
+  ML-Agents compila para WebGL/IL2CPP) — en curso.
+
+### Bloqueado en el humano (§8)
+
+Construir el player en máquina con licencia → subir a la VM spot → `mlagents-learn` →
+devolver `RaceAgent.onnx` + logs de TensorBoard + run-id + nº de pasos + commit. La
+iteración 2 de Fase 2 (análisis de curvas, tuneo de recompensas, validación del `.onnx` en
+WebGL) empieza cuando eso vuelva.
+
+### Segundo bug del build de entrenamiento (2026-09-03)
+
+Primer intento en la NUC (`build.log`): la licencia Personal activó bien y los scripts
+compilaron, pero `BuildPlayer` falló con `Currently selected scripting backend (Mono) is
+not installed`. El proyecto trae el backend de Standalone en Mono (default de Unity) y la
+NUC solo tiene "Linux Build Support (IL2CPP)" instalado — que es exactamente lo que pide
+§9. Fix: `Fase2TrainingBuild` fuerza `PlayerSettings.SetScriptingBackend(
+NamedBuildTarget.Standalone, ScriptingImplementation.IL2CPP)` antes de `BuildPlayer`. Los
+paquetes de toolchain de Linux (`com.unity.toolchain.linux-x86_64-linux`,
+`com.unity.sysroot.base`, `com.unity.sdk.linux-x86_64`) ya estaban resueltos, así que la
+cross-compilación IL2CPP Windows→Linux tiene todo lo que necesita. Commit `1f397ee`.
+
+### Tercer bug — falta el toolchain de cross-compilación win→linux (2026-09-03)
+
+Segundo intento en la NUC (`build.log`, 826 KB — IL2CPP sí arrancó esta vez): el player
+falló en el post-proceso con `No Toolchain found for host platform. Please install package
+'com.unity.toolchain.win-x86_64-linux'` / `Unable to find an Linux Sysroot` /
+`Internal build system error. BuildProgram exited with code 1`. El repo se preparó en Linux,
+así que el manifest traía `com.unity.toolchain.linux-x86_64-linux` (host Linux → target
+Linux) pero no el equivalente para host Windows. Fix: agregar
+`com.unity.toolchain.win-x86_64-linux@1.1.0` a `unity/Packages/manifest.json` (y a
+`packages-lock.json`) — misma versión que el resto de la familia, marcada `unity: 6000.3`,
+y trae el sysroot Linux dentro del paquete. Los dos toolchains conviven; el editor elige el
+que corresponde al SO del host, así que la build sigue funcionando desde Linux (CI, mi
+máquina) y ahora también desde la NUC Windows.
+
+### Build de entrenamiento OK en la NUC (2026-09-03)
+
+Tercer intento en la NUC a `HEAD = 21ab188`: `result=Succeeded`. El humano copió
+`unity/Builds/train-linux/` de vuelta al repo (ignorado por `.gitignore`, no se commitea).
+Contenido verificado: ELF x86-64 IL2CPP (`GameAssembly.so` 112 MB, `il2cpp_data/`),
+`UnityPlayer.so`, y el runtime de ML-Agents horneado —
+`Unity.ML-Agents.dll`, `Grpc.Core.dll`, `Plugins/AnyCPU/libgrpc_csharp_ext.x64.so`,
+más `AgenticRacing.{Agents,Track,Vehicle,Demo}.dll`. Es un player headless válido para
+`mlagents-learn --env=`.
+
+Resumen de los tres bugs de este build (todos por construir desde host Windows con solo
+los módulos de §9): (1) subtarget `Server` persistido → forzar `Player`; (2) backend
+Standalone en Mono → forzar IL2CPP; (3) faltaba el toolchain `win-x86_64-linux` en el
+manifest (el repo se preparó en Linux). Ninguno lo puede atrapar CI, que solo compila
+WebGL en Linux y nunca hace un player Windows→Linux.
+
+**Siguiente, humano (§8)**: subir `train-linux/` a la VM spot de Azure (~16 vCPU, Ubuntu),
+`chmod +x train.x86_64`, venv Python con `mlagents==1.1.0`, y
+`mlagents-learn training/config/race_ppo.yaml --env=Builds/train-linux/train.x86_64
+--no-graphics --num-envs=4 --run-id=race01` en tmux (`--resume` tras desalojo). Devolver
+`results/race01/` (con `RaceAgent.onnx` + `events.out.tfevents.*`), run-id, nº de pasos y
+el commit del player (`21ab188`). Con eso arranca la iteración 2 de Fase 2.
+
+### Provisión de la VM de entrenamiento en Azure (2026-09-03/04)
+
+**Cuota**: una suscripción nueva trae `Total Regional Spot vCPUs` (el nombre interno que usa
+la API/CLI es `lowPriorityCores`, el portal lo muestra como "Spot vCPUs") en 3 por región —
+insuficiente para 16 vCPU. La extensión `az quota` dio problemas (provider `Microsoft.Quota`
+sin registrar, throttling de 3600 s, nombres de subcomando que cambian entre versiones). Lo
+que sí funcionó: portal → **Quotas** → Compute → filtrar por el grupo **"Spot"** → única
+opción **"Spot vCPUs"** → New quota request → nuevo límite. Se resolvió solo (sin ticket de
+soporte) en unos minutos. Verificar el resultado con `az vm list-usage -l <region> -o table`
+(no con `az quota show`, que depende del provider problemático) — la fila se llama
+`Total Regional Low-priority vCPUs`.
+
+**Capacidad**: además de cuota, el tamaño concreto (`Standard_F16s_v2`) puede no tener
+capacidad spot en una región en un momento dado (`SkuNotAvailable`) — probar otra región o
+`--zone`, no es un problema de configuración.
+
+**Bug de la Unity CLI en `az`**: los errores de `az vm create` para plantillas ARM salen con
+un traceback de Python roto (`RequestThrottled`/`RuntimeError: The content for this response
+was already consumed`) que oculta el mensaje real de Azure — hay que leer el bloque
+`Exception Details` más arriba en el mismo output, no el traceback final.
+
+### SIGSEGV del player headless en la VM — `GfxDevice: Null` + Xvfb (2026-09-03/04)
+
+Con el player subido y `mlagents-learn` instalado, el entorno crasheaba con
+`UnityEnvironmentException: Environment shut down with return code -11 (SIGSEGV)` en cuanto
+`mlagents-learn` intentaba levantar el primer entorno — sin más detalle, porque mlagents solo
+reporta el exit code, no el log de Unity. Diagnóstico: correr el binario suelto con
+`./train.x86_64 -batchmode -nographics -logFile -` sí imprime el log completo de Unity, y el
+crash cae justo después de `Registered Communicator in Agent.`, durante el registro del
+`Agent`/comunicador de ML-Agents — no en nuestro código (`TrainingArena`/`RaceAgent` son
+observación vectorial + raycasts puros, sin cámaras ni RenderTexture).
+
+Se probó primero una pista falsa: el log también mostraba una `DllNotFoundException` de
+`libAppUINativePlugin.so` por falta de `libgtk-3.so.0` (paquete `Unity.AppUI`, ligado
+probablemente por `com.unity.ai.inference`, sin relación con la escena de entrenamiento).
+Instalar `libgtk-3-0` quitó esa excepción pero el SIGSEGV siguió idéntico — no era la causa.
+
+**Causa real y fix**: `-nographics` fuerza `GfxDevice: Null`, una ruta de código con historial
+de segfaults en builds Linux headless de Unity 6 combinados con el registro de Agent/comunicador
+de ML-Agents. El fix es darle un framebuffer real por software en vez del device Null:
+
+```bash
+sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils
+xvfb-run -a mlagents-learn training/config/race_ppo.yaml \
+  --env=Builds/train-linux/train.x86_64 --num-envs=4 --run-id=race01
+# nota: SIN --no-graphics — xvfb-run cumple esa función
+```
+
+Un solo `xvfb-run` alcanza para todos los `--num-envs`, porque `mlagents-learn` lanza los
+subprocesos del player heredando el mismo `$DISPLAY`. Aplica esta nota a cualquier VM de
+entrenamiento futura (incluida una reprovisión tras desalojo spot): **siempre** envolver
+`mlagents-learn` en `xvfb-run -a` y nunca pasar `--no-graphics` en este proyecto.
+
+### `UnityTimeOutException` tras arreglar el SIGSEGV — dos bugs más, y uno es de fondo (2026-09-04)
+
+Con el SIGSEGV resuelto, `mlagents-learn` seguía sin conectar: el player arrancaba (confirmado
+por `strace -f -e trace=execve,exit_group`: el `execve` del binario ocurre y devuelve 0) pero
+Python nunca recibía el handshake y terminaba en `UnityTimeOutException` tras matarlo con
+`SIGKILL` — sin crash, sin nada en `/var/crash` ni en `dmesg` (Ubuntu no loguea segfaults ahí
+por defecto, `kernel.print-fatal-signals=0`; esa pista llevó a un callejón sin salida).
+Se descartó contaminación de intentos previos (sin procesos huérfanos, puerto 5005 libre) y se
+reprodujo **idéntico en la NUC local** (Ubuntu 26.04, conda con Python 3.10.12 pinneado — 
+`mlagents==1.1.0` exige `Python >=3.10.1,<=3.10.12` exacto, no sirve cualquier 3.10.x), lo que
+confirmó que no era un problema de la VM de Azure sino un bug real del proyecto/build.
+
+Sin `-logFile -` a mano, `mlagents-learn` sí pasa su propio `-logFile` apuntando a
+`results/<run-id>/run_logs/Player-0.log` — ahí apareció el error real, dos capas:
+
+1. **El plugin nativo de gRPC no está donde `Grpc.Core` lo busca.** Unity empaqueta
+   `libgrpc_csharp_ext.x64.so` en `train_Data/Plugins/AnyCPU/`, pero el wrapper `Grpc.Core`
+   (empaquetado dentro de ML-Agents) lo busca con rutas de paquete NuGet genérico:
+   junto al ejecutable, en `runtimes/linux/native/`, o en `../Plugins/x86_64/` relativos al
+   ejecutable — ninguna coincide con `AnyCPU/`. Sin la librería, cae a
+   `FileNotFoundException` → "Couldn't connect to trainer ... Will perform inference instead."
+   **Fix, después de cada build**: copiar el `.so` junto al ejecutable:
+   ```bash
+   cp train_Data/Plugins/AnyCPU/libgrpc_csharp_ext.x64.so ./libgrpc_csharp_ext.x64.so
+   ```
+   (mismo directorio que `train.x86_64`). Aplica sin importar el scripting backend.
+
+2. **IL2CPP no es compatible con el comunicador gRPC de ML-Agents — bug de fondo, no de
+   nuestro código.** Con el `.so` en su lugar, el error cambia a:
+   ```
+   System.NotSupportedException: To marshal a managed method, please add an attribute named
+   'MonoPInvokeCallback' to the method definition. The method we're attempting to marshal is:
+   Grpc.Core.Internal.NativeLogRedirector::HandleWrite
+   ```
+   Es una limitación conocida de `Grpc.Core` bajo IL2CPP: IL2CPP compila todo AOT y no puede
+   generar en runtime el trampolín nativo para ese callback, cosa que Mono sí hace vía JIT.
+   Unity documenta que el **player de entrenamiento de ML-Agents debe usar el scripting
+   backend Mono** — IL2CPP solo está soportado para *inferencia* (`com.unity.ai.inference`,
+   que es lo que corre el WebGL del demo), no para el canal de entrenamiento. Esto contradice
+   directamente CLAUDE.md §9 ("Linux Build Support (IL2CPP)... Ningún otro"), así que se
+   consultó al dueño del proyecto antes de tocarlo en vez de decidir unilateralmente (§12).
+
+**Estado al cierre de la sesión**: pendiente la decisión de instalar también "Linux Build
+Support (Mono)" y ajustar `Fase2TrainingBuild.cs` para que el player de entrenamiento (solo
+ese — el build de WebGL del demo sigue en IL2CPP sin cambios) use Mono en vez de forzar
+IL2CPP. El forzado a IL2CPP de `1f397ee` fue, en retrospectiva, el fix equivocado para el
+primer bug de esta saga ("Mono no instalado") — la solución correcta era instalar el módulo
+Mono en la máquina de build, no forzar IL2CPP.
+
+### Giro final: el player de entrenamiento pasa a Windows/Mono, no Linux (2026-09-04)
+
+Al revisar qué módulo instalar, la CLI de Unity Hub (`unityhub --headless install-modules
+--version 6000.3.22f1`) reveló que **"Linux Build Support (Mono)" ya no existe** — Unity 6
+eliminó el scripting backend Mono para el target Linux Standalone; hoy Linux solo ofrece
+IL2CPP. Como el bug de la entrada anterior (`Grpc.Core` + IL2CPP) es insalvable, un player
+de entrenamiento **Linux** queda descartado por completo con esta versión de Unity, sin
+importar el backend. La CLI sí lista `windows-mono` ("Windows Build Support (Mono)"), así
+que — consultado y confirmado con el dueño del proyecto — el player de entrenamiento pasa a
+**Windows Standalone + Mono**, corrido en la partición Windows de la NUC (o una VM Windows si
+hiciera falta más cómputo más adelante). El WebGL del demo no cambia: sigue en IL2CPP porque
+WebGL lo exige de todas formas, y no usa el comunicador de ML-Agents.
+
+Cambios:
+- `Fase2TrainingBuild.cs`: target `StandaloneWindows64`, `ScriptingImplementation.Mono2x`
+  (ya no `IL2CPP`), salida `Builds/train-windows/train.exe`. Además, copia automáticamente
+  `grpc_csharp_ext.x64.dll` junto al `.exe` tras el build — mismo bug de ubicación del
+  plugin nativo que en Linux (ver entrada anterior), confirmado también en la variante
+  Windows del paquete (`Library/PackageCache/com.unity.ml-agents@.../Plugins/ProtoBuffer/
+  runtimes/win/native/grpc_csharp_ext.x64.dll`).
+- CLAUDE.md §9: el módulo requerido pasa de "Linux Build Support (IL2CPP)" a "Windows Build
+  Support (Mono)", con la explicación completa inline. §2.3 actualizada para no asumir Linux.
+- `training/README.md`: instrucciones reescritas para Windows — ya no hace falta `Xvfb`
+  (un `.exe` de Windows no necesita framebuffer virtual para correr headless, basta
+  `-batchmode`), y se documenta el rango exacto de Python que exige `mlagents==1.1.0`
+  (`>=3.10.1,<=3.10.12` — un `conda create python=3.10` sin fijar el patch puede darte una
+  versión fuera de rango y fallar la instalación, como pasó esta noche).
+
+Pendiente para la próxima sesión: instalar `windows-mono` en el Editor de la partición
+Windows de la NUC (`unityhub --headless install-modules --version 6000.3.22f1 -m
+windows-mono` — la sintaxis exacta de invocación de Hub varía por SO, en Windows lleva
+`-- --headless` por ser una app Electron), reconstruir con el script actualizado, y
+verificar que `mlagents-learn --env=Builds/train-windows/train.exe --num-envs=1` conecta
+sin el `UnityTimeOutException` que bloqueó toda la sesión de hoy.
+
+Pendiente de limpieza no urgente: `unity/Packages/manifest.json` y `packages-lock.json`
+todavía traen los tres paquetes de toolchain de cross-compilación IL2CPP Linux
+(`com.unity.sdk.linux-x86_64`, `com.unity.toolchain.linux-x86_64-linux`,
+`com.unity.toolchain.win-x86_64-linux`) agregados en `21ab188`/commits previos — ya no hacen
+falta porque el player de entrenamiento no se construye más para Linux. No estorban (UPM
+simplemente no los usa), así que se puede posponer su remoción hasta que se abra el Editor
+y se pueda dejar que resuelva el manifest de nuevo sin arriesgar un lock file inconsistente
+editado a mano.

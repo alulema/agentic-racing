@@ -122,11 +122,14 @@ calcular gradientes. Si en algún momento consideras cambiar a observaciones vis
 (cámaras), ese cálculo cambia — pero ese cambio no está en el plan.
 
 Setup:
-- VM Azure **spot**, compute-optimized, ~16 vCPU. Spot da 60–90% de descuento y el
-  entrenamiento tolera desalojos si haces checkpoint frecuente y usas `--resume`.
-- **No corras el Editor en la VM.** Construye un player headless de Linux de la escena de
-  entrenamiento, súbelo, y corre `mlagents-learn --env=<build>`. Ese binario no requiere
-  licencia Unity.
+- VM Azure **spot**, compute-optimized, ~16 vCPU — o la NUC del dueño del proyecto si
+  alcanza para la corrida (decisión revisada 2026-09-04, ver §9 y `docs/Devlog.md`: el
+  player de entrenamiento es **Windows/Mono**, no Linux/IL2CPP, así que si se usa VM cloud
+  debe ser Windows). Spot da 60–90% de descuento y el entrenamiento tolera desalojos si
+  haces checkpoint frecuente y usas `--resume`.
+- **No corras el Editor en la VM.** Construye un player headless de Windows (§9) de la
+  escena de entrenamiento, súbelo (o entrena localmente si ya estás en esa máquina), y
+  corre `mlagents-learn --env=<build>`. Ese binario no requiere licencia Unity.
 - Muchas arenas en paralelo (`--num-envs`), ajustado al número de núcleos.
 - **Desasigna la VM cuando no entrenes.** Detenida-desasignada no cobra cómputo.
 - Presupuesto estimado del proyecto completo: **~$15–40 en spot** (~80–150 horas de VM,
@@ -774,8 +777,23 @@ exactamente con la imagen de GameCI en CI.
   GameCI en CI debe coincidir exactamente con este string. Se eligió LTS sobre 6.5 porque
   ML-Agents es la dependencia más frágil del stack y es la que más probablemente fue
   validada contra LTS; además 6.3 LTS tiene soporte hasta diciembre de 2027.
-- Módulos del editor requeridos: **Web Build Support** (target del demo) y **Linux Build
-  Support (IL2CPP)** (player headless de entrenamiento). Ningún otro.
+- Módulos del editor requeridos: **Web Build Support** (target del demo) y **Windows Build
+  Support (Mono)** (player headless de entrenamiento). Ningún otro.
+
+  > ⚠️ **Por qué Windows/Mono y no Linux/IL2CPP para el player de entrenamiento** (decisión
+  > revisada 2026-09-04, ver `docs/Devlog.md`): la intención original era un player Linux
+  > para la VM de entrenamiento (§2.3), con IL2CPP porque Unity 6 **eliminó** el scripting
+  > backend Mono para el target Linux Standalone — hoy Linux solo ofrece IL2CPP. El problema:
+  > el comunicador gRPC que trae empaquetado ML-Agents (`Grpc.Core`, la librería vieja del
+  > proyecto grpc/grpc) no funciona bajo IL2CPP — su callback de redirección de logs nativos
+  > no está marcado `[MonoPInvokeCallback]`, así que el AOT de IL2CPP no puede generar el
+  > trampolín y truena con `System.NotSupportedException` al arrancar, antes de completar el
+  > handshake con `mlagents-learn`. Mono sí lo resuelve vía JIT. Windows Standalone sí sigue
+  > ofreciendo Mono (`windows-mono` en la CLI de Unity Hub), así que el player de
+  > entrenamiento se construye para Windows en su lugar — se corre en la partición Windows de
+  > la NUC del dueño del proyecto, o en una VM Windows si hace falta más cómputo. El WebGL del
+  > demo no se toca: sigue en IL2CPP (WebGL lo exige de todas formas) y no usa este
+  > comunicador.
 - `com.unity.ml-agents`: release 4.x
 - `com.unity.ai.inference`: la versión que ML-Agents 4.x requiera — verifica que no haya
   conflicto antes de fijarla
@@ -854,6 +872,13 @@ exactamente con la imagen de GameCI en CI.
 
 ## 12. Cómo trabajar conmigo
 
+- **Al retomar una sesión** (nueva ventana, nueva máquina — incluida la partición Windows de
+  la NUC, que es un directorio de proyecto distinto para Claude Code y no comparte memoria
+  con la sesión Linux): lee **las últimas entradas de `docs/Devlog.md`** antes de hacer nada.
+  Ahí queda el punto exacto donde se cerró la sesión anterior, qué se probó, qué falló, y qué
+  sigue. No asumas que el código o los scripts hacen lo que su nombre sugiere sin verificar
+  contra el Devlog — varias decisiones de este documento (§2.3, §9) se revisaron a mitad de
+  proyecto y el Devlog es la fuente de verdad de *por qué*.
 - Antes de cada fase, propón un plan corto y espera confirmación.
 - Un PR por fase. No mezcles fases.
 - Si el build de CI falla, lee el log y corrige — no pidas ayuda hasta haberlo intentado.
