@@ -29,8 +29,8 @@ namespace AgenticRacing.Agents
         // edit here + rebuild the training player (docs/Devlog.md 2026-09-06).
         [Header("Reward shaping")]
         [SerializeField] private float progressRewardPerMetre = 0.02f;
-        [SerializeField] private float speedRewardPerSec = 0.03f;     // scaled by forward-speed fraction
-        [SerializeField] private float lineFollowRewardPerSec = 0.02f; // when moving, aligned, and near the racing line
+        [SerializeField] private float speedRewardPerSec = 0.15f;     // scaled by forward-speed fraction
+        [SerializeField] private float lineFollowRewardPerSec = 0.10f; // when moving, aligned, and near the racing line
         [SerializeField] private float timePenaltyPerStep = 0.0005f;
         [SerializeField] private float edgeCreepPenaltyPerSec = 0.5f;
         [SerializeField] private float offTrackPenalty = 1.0f;
@@ -41,11 +41,12 @@ namespace AgenticRacing.Agents
 
         [Header("Episode limits")]
         [SerializeField] private float offTrackMargin = 2.0f;   // metres past the edge = fully off
-        [SerializeField] private float stuckSpeed = 1.0f;       // m/s
+        [SerializeField] private float stuckSpeed = 0.5f;       // m/s
         [SerializeField] private float stuckSeconds = 3.0f;
         [SerializeField] private float wrongWaySeconds = 2.5f;
         [SerializeField] private float spawnHeadingNoiseDeg = 10f;
         [SerializeField] private float spawnLateralNoise = 2.0f;
+        [SerializeField] private float launchSpeed = 8.0f;      // m/s along the track at spawn — no dead-stop starts
 
         private CarController _car;
         private Rigidbody _rb;
@@ -59,6 +60,8 @@ namespace AgenticRacing.Agents
         private float _lapArc;
         private float _stuckTimer;
         private float _wrongWayTimer;
+        private bool _stuckArmed;    // stuck check only bites once the car has actually got moving
+        private bool _diagCounted;   // did EndDiag already tally the current episode?
 
         private int _episodeSteps;   // steps taken in the current lap/episode
 
@@ -100,6 +103,11 @@ namespace AgenticRacing.Agents
             if (ep <= 15 || ep % 200 == 0)
                 Debug.Log($"[RaceAgent] OnEpisodeBegin #{ep}: track={_track != null} " +
                           $"stepCount={StepCount} prevEpisodeSteps={_episodeSteps}");
+            // If the previous episode ended without hitting one of our explicit
+            // EndEpisode() paths, it timed out on MaxStep — count it so the tally
+            // reflects the real split.
+            if (ep > 1 && !_diagCounted && _track != null) EndDiag("maxStep", _episodeSteps);
+            _diagCounted = false;
             _episodeSteps = 0;
 
             if (_track == null) return;
@@ -109,10 +117,10 @@ namespace AgenticRacing.Agents
             var center = _track.Centerline;
             int n = center.Count;
             int i = _rng.Next(n);
-            Vector3 fwd = (center[(i + 1) % n] - center[i]);
-            fwd.y = 0f;
-            fwd.Normalize();
-            fwd = Quaternion.Euler(0f, (float)(_rng.NextDouble() * 2 - 1) * spawnHeadingNoiseDeg, 0f) * fwd;
+            Vector3 trackDir = (center[(i + 1) % n] - center[i]);
+            trackDir.y = 0f;
+            trackDir.Normalize();
+            Vector3 fwd = Quaternion.Euler(0f, (float)(_rng.NextDouble() * 2 - 1) * spawnHeadingNoiseDeg, 0f) * trackDir;
 
             Vector3 side = new Vector3(-fwd.z, 0f, fwd.x);
             Vector3 spawn = center[i] + Vector3.up * 0.4f
@@ -120,11 +128,16 @@ namespace AgenticRacing.Agents
 
             _car.PlaceAt(spawn, fwd);
             _car.Throttle = _car.Brake = _car.Steer = 0f;
+            // Rolling start along the track. race01/race02 spawned at a dead stop
+            // every episode and most episodes ended in ~3 s via the stuck check
+            // before the car ever launched, so lap reward never got any credit.
+            _rb.linearVelocity = trackDir * launchSpeed;
 
             _progress.Reset(_rb.position);
             _lapArc = 0f;
             _stuckTimer = 0f;
             _wrongWayTimer = 0f;
+            _stuckArmed = false;
         }
 
         public override void CollectObservations(VectorSensor sensor)
@@ -260,7 +273,11 @@ namespace AgenticRacing.Agents
                 return;
             }
 
-            if (Mathf.Abs(_car.ForwardSpeed) < stuckSpeed) _stuckTimer += Time.fixedDeltaTime;
+            // Only let the stuck check bite after the car has genuinely got going
+            // at least once — a fumbled launch shouldn't end the episode, a
+            // mid-track stall should.
+            if (_car.ForwardSpeed > stuckSpeed) _stuckArmed = true;
+            if (_stuckArmed && Mathf.Abs(_car.ForwardSpeed) < stuckSpeed) _stuckTimer += Time.fixedDeltaTime;
             else _stuckTimer = 0f;
             if (_stuckTimer > stuckSeconds)
             {
@@ -292,12 +309,30 @@ namespace AgenticRacing.Agents
             }
         }
 
-        private static readonly System.Collections.Generic.HashSet<string> _seenEndReasons = new();
+        // Running tally of how episodes end, across all agents in the process
+        // (stuck / offTrack / wrongWay / lap / maxStep). Logged as a rolling
+        // window of the last N so the split is visible as training progresses,
+        // not just a lifetime average dominated by the bad early episodes.
+        private const int EndWindow = 400;
+        private static readonly System.Collections.Generic.Queue<string> _endRecent = new();
+        private static int _endTotal;
+        private static float _lapArcSum;
         private void EndDiag(string reason, float value)
         {
-            if (_seenEndReasons.Add(reason))
-                Debug.Log($"[RaceAgent] first EndEpisode via '{reason}' (value={value:F2}) " +
-                          $"at stepCount={StepCount} episodeSteps={_episodeSteps}");
+            _diagCounted = true;
+            _endTotal++;
+            _lapArcSum += _lapArc;
+            _endRecent.Enqueue(reason);
+            while (_endRecent.Count > EndWindow) _endRecent.Dequeue();
+            if (_endTotal % EndWindow == 0)
+            {
+                var counts = new System.Collections.Generic.Dictionary<string, int>();
+                foreach (var r in _endRecent) { counts.TryGetValue(r, out int c); counts[r] = c + 1; }
+                var parts = new System.Collections.Generic.List<string>();
+                foreach (var kv in counts) parts.Add($"{kv.Key}={100f * kv.Value / _endRecent.Count:F0}%");
+                Debug.Log($"[RaceAgent] end reasons @ {_endTotal} (last {_endRecent.Count}): " +
+                          $"{string.Join(", ", parts)} | lifetime mean lapArc={_lapArcSum / _endTotal:F0}m");
+            }
         }
 
         private void OnCollisionEnter(Collision collision)

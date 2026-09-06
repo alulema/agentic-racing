@@ -3,15 +3,15 @@
 # directiva). CPU-only: la GPU no aporta con este setup (CLAUDE.md §2.3).
 #
 #   mlagents-learn training/config/race_ppo.yaml `
-#     --env=unity/Builds/train-windows/train.exe --num-envs=4 --run-id=race02
+#     --env=unity/Builds/train-windows/train.exe --num-envs=4 --run-id=race04
 #
 # El nombre "RaceAgent" tiene que coincidir con BehaviorParameters.BehaviorName
 # (ver TrainingArena.AddBehaviour).
 #
-# race01 (2026-09-06): convergió a ~1.85M steps con Cumulative Reward ~3.4 y de
-# ahí quedó plano 18M steps más — óptimo local de "avanzar despacio y seguro".
-# iter 2: max_steps a 4M (converge mucho antes), beta más alto por exploración,
-# y reward shaping de velocidad / trazada en RaceAgent.cs (docs/Devlog.md).
+# race01/race02: se aplanaban a ~1.25M steps con reward ~4. race03 (iter 3:
+# rolling start + stuck armado + shaping útil, ver docs/Devlog.md) rompió el
+# plateau: episodios 150→750 steps y reward −2 → ~10 SIN aplanarse a 4M. iter 4:
+# subir max_steps a 10M para dejar que consolide (seguía subiendo).
 
 behaviors:
   RaceAgent:
@@ -41,8 +41,8 @@ behaviors:
         strength: 1.0
 
     keep_checkpoints: 20
-    checkpoint_interval: 250000
-    max_steps: 4000000
+    checkpoint_interval: 500000
+    max_steps: 10000000
     time_horizon: 1000
     summary_freq: 50000
     threaded: false

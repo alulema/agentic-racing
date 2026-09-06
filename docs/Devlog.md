@@ -1366,3 +1366,82 @@ race02; se quitan antes de las corridas de población de Fase 3.
 Qué mirar en TensorBoard: que `Cumulative Reward` **no** se aplane a 1.85M como race01, que
 `Episode Length` deje de decaer, y que el % de fines por `lap` suba. Pendiente aparte:
 validar un `.onnx` en WebGL sobre 3 seeds no vistas (criterio de aceptación de Fase 2).
+
+### race02 — el shaping ayudó poco; el cuello es la supervivencia del episodio (2026-09-06)
+
+`race02` (4M steps, ~44 min, `num_envs=4`). Curvas:
+
+| | 50k | ~1.25M | 4M |
+|---|---|---|---|
+| Cumulative Reward | −1.10 | **4.12** | 4.10 |
+| Episode Length | 40 | 180 (pico 220 @350k) | 149 |
+| Entropy | 1.42 | 1.34 | 1.27 |
+| Value Loss | 0.04 | 0.20 | 0.25 |
+
+Misma forma que race01: **converge a ~1.25M steps y se aplana** (plateau ~4.0 vs ~3.4 de
+race01 — el shaping subió el techo ~0.6 y adelantó la convergencia, nada más). `beta=1e-2`
+mantuvo la entropía alta (1.27 vs 0.82 de race01) pero no mejoró la política final.
+`Std of Reward` ~9.8 (más alto que race01) y `Value Loss` sigue subiendo — más ruido, no
+más competencia.
+
+**Diagnóstico**: el problema no es el peso de las recompensas, es que **los episodios
+duran ~150 steps (~3 s)** y casi nunca se completa una vuelta, así que todo el reward de
+vuelta (`lapBonus`/`fastLapBonus`) es peso muerto y el shaping por-step que agregué era
+además ~10–30× más chico que el reward de progreso y ~1000× más chico que
+`offTrackPenalty=1.0`.
+
+**Hipótesis fuerte**: cada episodio spawnea el auto **parado** (`OnEpisodeBegin` pone
+velocidad 0), y el check de `stuck` (`< 1 m/s` por 3 s continuos) lo mata a los ~150 steps
+antes de que arranque. El RL nunca llega lo bastante lejos para que el `lapBonus` reciba
+crédito.
+
+**Cambios iter 3** (`RaceAgent.cs`):
+- **Rolling start**: `_rb.linearVelocity = trackDir * launchSpeed` (8 m/s) al spawnear.
+- **`stuck` armado**: solo cuenta después de que el auto superó `stuckSpeed` al menos una
+  vez en el episodio (`_stuckArmed`) — un arranque fallido ya no mata, un stall a mitad de
+  pista sí. `stuckSpeed` 1.0 → 0.5.
+- Shaping con magnitud útil: `speedRewardPerSec` 0.03 → 0.15, `lineFollowRewardPerSec`
+  0.02 → 0.10.
+- Instrumentación: `EndDiag` ahora lleva un tally acumulado (stuck / offTrack / wrongWay /
+  lap) y `mean lapArc`, logueado cada 500 fines — para ver la distribución real de por qué
+  mueren los episodios.
+
+**Siguiente**: rebuild → `--run-id=race03 --num-envs=4`. Confirmar en el `Player-0.log` el
+split de `end reasons` y si `Episode Length` sube. Si sigue plano y corto, toca ver un
+checkpoint corriendo en el Editor (Behavior Type = Inference Only) antes de seguir tuneando.
+
+### race03 — el rolling start rompió el plateau (2026-09-06)
+
+`race03` (4M steps, iter 3). **Cambio cualitativo**, no incremental:
+
+| | 50k | ~2M | 4M |
+|---|---|---|---|
+| Cumulative Reward | −1.71 | ~9 | **~10** (checkpoint window hasta 31 @2.5M, 12.6 final) |
+| Episode Length | 242 | 737 | **759** (subiendo) |
+| Entropy | 1.42 | 1.35 | 1.32 |
+| Value Loss | 0.04 | 0.15 | 0.16 (estable) |
+
+- race01/race02 se aplanaban en reward ~4 con episodios de ~150 steps **decreciendo**.
+  race03: episodios **5× más largos (~750) y creciendo**, reward de −2 a ~10 **sin
+  aplanarse a 4M**, `Value Loss` estable (no la deriva de race01/02).
+- El tally `end reasons @ 500` (temprano, política aún mala) daba stuck 80–85%, lap 6–12%.
+  Hacia el final del run muchos episodios llegan a `MaxStep=4000` (`prevEpisodeSteps=4000`
+  en los logs) — sobreviven los 80 s pero todavía no cierran la vuelta consistentemente
+  (`mean lapArc` ~240 m temprano). El `stuck` temprano era el spawn parado, confirmado.
+- Sin `Fewer observations`, sin excepciones, log limpio (325 líneas).
+
+**Conclusión**: el rolling start + `stuck` armado eran el bloqueo real; el shaping de
+velocidad/trazada ahora sí tracciona. La política aún es inconsistente (`fwdSpeed` salta
+entre 12 y −2 m/s dentro de un episodio) y no llega al criterio de Fase 2, pero la curva
+apunta en la dirección correcta y no había convergido.
+
+**Cambios iter 4**:
+- `race_ppo.yaml`: `max_steps` 4M → **10M** (seguía subiendo), `checkpoint_interval` de
+  vuelta a 500k.
+- `RaceAgent.cs`: el tally de `end reasons` ahora es ventana móvil de los últimos 400
+  (no promedio de vida dominado por los episodios malos del principio) y **cuenta también
+  los fines por `MaxStep`** (`_diagCounted` / rama `maxStep` en `OnEpisodeBegin`).
+
+**Siguiente**: rebuild → `--run-id=race04 --num-envs=4` (~1.8 h). Mirar si el reward sigue
+subiendo más allá de ~10 y si el % de `lap` en la ventana móvil crece. Si se aplana,
+comparar con ver un checkpoint en el Editor.
