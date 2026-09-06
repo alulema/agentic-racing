@@ -31,6 +31,11 @@ namespace AgenticRacing.Agents
 
         private void Awake()
         {
+            // See TrainingSceneBootstrap: keep stepping while the player window is
+            // unfocused, or mlagents-learn times the environment out. Harmless to
+            // set from every arena.
+            Application.runInBackground = true;
+
             Track = TrackGenerator.Generate(seed);
             TrackEdgeColliders.Build(Track, transform);
             Car = BuildAgentCar(Track);
@@ -40,6 +45,21 @@ namespace AgenticRacing.Agents
         {
             var body = GameObject.CreatePrimitive(PrimitiveType.Cube);
             body.name = "AgentCar";
+
+            // Assemble the whole agent while the GameObject is INACTIVE, then
+            // switch it on once. ML-Agents' Agent.OnEnable runs InitializeSensors()
+            // the instant the component lands on an *active* object; adding
+            // Rigidbody / CarController / BehaviorParameters / DecisionRequester /
+            // RayPerceptionSensorComponent3D / RaceAgent one at a time on a live
+            // object makes that fire against a half-built component set. The
+            // negotiated observation spec then ends up out of step with the
+            // runtime stream (spec sees the 12-float vector sensor only; runtime
+            // also sends the 27-float ray sensor), which crashes mlagents-learn on
+            // the first step with "Expected shape (12,) but got (27,)" and floods
+            // Player-0.log with "Fewer observations (0) ... size (12)". Building
+            // cold and activating once makes InitializeSensors() run exactly once
+            // over the final component set.
+            body.SetActive(false);
             body.transform.SetParent(transform, false);
             body.transform.localScale = new Vector3(2.0f, 0.8f, 4.2f);
             // Keep the BoxCollider (the car bounces off the edge walls), but put
@@ -49,16 +69,29 @@ namespace AgenticRacing.Agents
             // not raycasts.
             body.layer = 2; // Ignore Raycast
 
-            var rb = body.AddComponent<Rigidbody>();
+            body.AddComponent<Rigidbody>();
             var car = body.AddComponent<CarController>();
             car.ReadKeyboard = false;
 
+            // Order matters. BehaviorParameters + sensors first, then the Agent,
+            // then DecisionRequester LAST: DecisionRequester has
+            // [RequireComponent(typeof(Agent))] and [DefaultExecutionOrder(-10)];
+            // adding it before a concrete Agent makes Unity try to satisfy the
+            // requirement with the abstract Agent type, and its -10 Awake then
+            // races the Agent's own init. Added last, the requirement is already
+            // met and the request pipeline wires up cleanly.
+            AddBehaviour(body);
+            var agent = body.AddComponent<RaceAgent>();   // its Initialize() reads the arena + brain
+            agent.MaxStep = 4000;                          // ~80 s of sim = episode timeout
+            AddDecisionRequester(body);
+
+            body.SetActive(true);                          // single, clean InitializeSensors()
+
+            // PlaceAt needs CarController.Awake to have cached the Rigidbody, so it
+            // runs after activation. The first OnEpisodeBegin re-spawns the car at
+            // a random point on the centerline anyway; this is just a placeholder.
             Vector3 spawn = track.StartPosition + Vector3.up * 0.4f + track.StartDirection * 2f;
             car.PlaceAt(spawn, track.StartDirection);
-
-            AddBehaviour(body);
-            var agent = body.AddComponent<RaceAgent>();   // last: its Initialize() reads the arena + brain
-            agent.MaxStep = 4000;                          // ~80 s of sim = episode timeout
             return car;
         }
 
@@ -70,10 +103,6 @@ namespace AgenticRacing.Agents
             bp.BrainParameters.NumStackedVectorObservations = 1;
             bp.BrainParameters.ActionSpec = ActionSpec.MakeContinuous(3);
 
-            var dr = go.AddComponent<DecisionRequester>();
-            dr.DecisionPeriod = 5;
-            dr.TakeActionsBetweenDecisions = true;
-
             var ray = go.AddComponent<RayPerceptionSensorComponent3D>();
             ray.SensorName = "TrackRays";
             ray.DetectableTags = new List<string> { TrackEdgeColliders.EdgeTag };
@@ -83,6 +112,13 @@ namespace AgenticRacing.Agents
             ray.SphereCastRadius = 0.4f;
             ray.StartVerticalOffset = 0.3f;
             ray.EndVerticalOffset = 0.3f;
+        }
+
+        private static void AddDecisionRequester(GameObject go)
+        {
+            var dr = go.AddComponent<DecisionRequester>();
+            dr.DecisionPeriod = 5;
+            dr.TakeActionsBetweenDecisions = true;
         }
     }
 }

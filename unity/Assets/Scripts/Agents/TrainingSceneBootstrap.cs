@@ -17,6 +17,13 @@ namespace AgenticRacing.Agents
 
         private void Awake()
         {
+            // mlagents-learn launches this player unfocused; without this Unity
+            // throttles FixedUpdate to a crawl the moment the window loses focus
+            // and the trainer dies with "The Unity environment took too long to
+            // respond". ProjectSettings has runInBackground = 0 and ML-Agents 4.x
+            // no longer forces it, so set it here for the training build.
+            Application.runInBackground = true;
+
             int cols = Mathf.CeilToInt(Mathf.Sqrt(arenaCount));
             for (int i = 0; i < arenaCount; i++)
             {

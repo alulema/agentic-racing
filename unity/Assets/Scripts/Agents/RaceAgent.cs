@@ -24,14 +24,20 @@ namespace AgenticRacing.Agents
     [RequireComponent(typeof(Rigidbody))]
     public sealed class RaceAgent : Agent
     {
+        // NOTE: TrainingArena builds the agent in code with no field overrides, so
+        // these run with the values below, not with anything serialized. Tuning =
+        // edit here + rebuild the training player (docs/Devlog.md 2026-09-06).
         [Header("Reward shaping")]
         [SerializeField] private float progressRewardPerMetre = 0.02f;
+        [SerializeField] private float speedRewardPerSec = 0.03f;     // scaled by forward-speed fraction
+        [SerializeField] private float lineFollowRewardPerSec = 0.02f; // when moving, aligned, and near the racing line
         [SerializeField] private float timePenaltyPerStep = 0.0005f;
         [SerializeField] private float edgeCreepPenaltyPerSec = 0.5f;
         [SerializeField] private float offTrackPenalty = 1.0f;
         [SerializeField] private float wallHitPenalty = 0.1f;
         [SerializeField] private float stuckPenalty = 1.0f;
-        [SerializeField] private float lapBonus = 5.0f;
+        [SerializeField] private float lapBonus = 12.0f;
+        [SerializeField] private float fastLapBonus = 8.0f;           // extra, scaled by the MaxStep budget left at lap completion
 
         [Header("Episode limits")]
         [SerializeField] private float offTrackMargin = 2.0f;   // metres past the edge = fully off
@@ -54,6 +60,12 @@ namespace AgenticRacing.Agents
         private float _stuckTimer;
         private float _wrongWayTimer;
 
+        private int _episodeSteps;   // steps taken in the current lap/episode
+
+        // Fase 2 bring-up diagnostics. Remove once training is stable.
+        private static bool _loggedInit, _loggedObs;
+        private static int _episodeCount, _actionCount;
+
         public override void Initialize()
         {
             _car = GetComponent<CarController>();
@@ -72,10 +84,24 @@ namespace AgenticRacing.Agents
             _track = _arena.Track;
             _halfWidth = _track.Width * 0.5f;
             _progress = new TrackProgress(_track);
+
+            if (!_loggedInit)
+            {
+                _loggedInit = true;
+                Debug.Log($"[RaceAgent] Initialize ok: car={_car != null} rb={_rb != null} " +
+                          $"centerline={_track.Centerline?.Count ?? -1} racingLine={_track.RacingLine?.Count ?? -1} " +
+                          $"width={_track.Width} maxStep={MaxStep}");
+            }
         }
 
         public override void OnEpisodeBegin()
         {
+            int ep = ++_episodeCount;
+            if (ep <= 15 || ep % 200 == 0)
+                Debug.Log($"[RaceAgent] OnEpisodeBegin #{ep}: track={_track != null} " +
+                          $"stepCount={StepCount} prevEpisodeSteps={_episodeSteps}");
+            _episodeSteps = 0;
+
             if (_track == null) return;
 
             _directive = RaceDirective.RandomEpisode(_rng);
@@ -103,6 +129,19 @@ namespace AgenticRacing.Agents
 
         public override void CollectObservations(VectorSensor sensor)
         {
+            if (!_loggedObs)
+            {
+                _loggedObs = true;
+                var bp = GetComponent<Unity.MLAgents.Policies.BehaviorParameters>();
+                var dr = GetComponent<Unity.MLAgents.DecisionRequester>();
+                Debug.Log($"[RaceAgent] CollectObservations (first): track={_track != null} " +
+                          $"car={_car != null} progress={_progress != null} " +
+                          $"behaviorType={bp?.BehaviorType} actionSpec=C{bp?.BrainParameters.ActionSpec.NumContinuousActions}" +
+                          $"/D{bp?.BrainParameters.ActionSpec.NumDiscreteActions} " +
+                          $"decisionRequester={(dr != null ? "present" : "MISSING")} drAgent={(dr != null && dr.Agent != null)} " +
+                          $"sensors=[{DumpSensors()}]");
+            }
+
             if (_track == null) { for (int k = 0; k < 12; k++) sensor.AddObservation(0f); return; }
 
             float maxSpeed = Mathf.Max(1f, _car.Config.MaxSpeed);
@@ -138,8 +177,40 @@ namespace AgenticRacing.Agents
                 sensor.AddObservation(_directive.Kind == (DirectiveKind)k ? 1f : 0f);
         }
 
+        // Dumps the base Agent's private sensor list (name + flattened shape) so
+        // we can see duplicates / ordering. Reflection because `sensors` is
+        // internal to the ML-Agents assembly. Diagnostics only.
+        private string DumpSensors()
+        {
+            try
+            {
+                var f = typeof(Agent).GetField("sensors",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (!(f?.GetValue(this) is System.Collections.IEnumerable list)) return "reflect-fail";
+                var parts = new System.Collections.Generic.List<string>();
+                foreach (var o in list)
+                {
+                    if (o is ISensor si)
+                    {
+                        var shape = si.GetObservationSpec().Shape;
+                        var dims = new int[shape.Length];
+                        for (int d = 0; d < shape.Length; d++) dims[d] = shape[d];
+                        parts.Add($"{si.GetName()}({string.Join("x", dims)})");
+                    }
+                }
+                return string.Join(", ", parts);
+            }
+            catch (System.Exception e) { return "err:" + e.Message; }
+        }
+
         public override void OnActionReceived(ActionBuffers actions)
         {
+            int ac = ++_actionCount;
+            _episodeSteps++;
+            if (ac == 1 || ac % 20000 == 0)
+                Debug.Log($"[RaceAgent] OnActionReceived #{ac}: track={_track != null} " +
+                          $"stepCount={StepCount} fwdSpeed={(_car != null ? _car.ForwardSpeed : 0f):F2}");
+
             if (_track == null) return;
 
             var a = actions.ContinuousActions;
@@ -153,12 +224,38 @@ namespace AgenticRacing.Agents
             AddReward(fwdMetres * progressRewardPerMetre);
             AddReward(-timePenaltyPerStep);
 
+            // Speed and racing-line shaping. Both scale with the forward-speed
+            // fraction so they cannot be farmed at a standstill (that was the
+            // race01 failure mode: the policy settled for "creep forward safely").
+            float maxSpeed = Mathf.Max(1f, _car.Config.MaxSpeed);
+            float fwdFrac = Mathf.Clamp01(_car.ForwardSpeed / maxSpeed);
+            AddReward(speedRewardPerSec * fwdFrac * Time.fixedDeltaTime);
+
+            if (fwdFrac > 0.05f)
+            {
+                var line = _track.RacingLine;
+                var centerline = _track.Centerline;
+                int m = centerline.Count;
+                int s = _progress.NearestSample;
+                Vector3 rlTan = line[(s + 1) % m] - line[(s - 1 + m) % m];
+                rlTan.y = 0f;
+                float headingErr01 = rlTan.sqrMagnitude > 1e-6f
+                    ? Mathf.Abs(Vector3.SignedAngle(transform.forward, rlTan, Vector3.up)) / 180f
+                    : 0f;
+                Vector3 left = new Vector3(-_progress.Tangent.z, 0f, _progress.Tangent.x);
+                float rlOffset = Vector3.Dot(line[s] - centerline[s], left);
+                float lineDist01 = Mathf.Clamp01(Mathf.Abs(_progress.LateralOffset - rlOffset) / _halfWidth);
+                float follow = (1f - Mathf.Clamp01(headingErr01 * 3f)) * (1f - lineDist01);
+                AddReward(lineFollowRewardPerSec * follow * fwdFrac * Time.fixedDeltaTime);
+            }
+
             float absLat = Mathf.Abs(_progress.LateralOffset);
             if (absLat > _halfWidth)
                 AddReward(-edgeCreepPenaltyPerSec * Time.fixedDeltaTime);
             if (absLat > _halfWidth + offTrackMargin)
             {
                 AddReward(-offTrackPenalty);
+                EndDiag("offTrack", absLat);
                 EndEpisode();
                 return;
             }
@@ -168,6 +265,7 @@ namespace AgenticRacing.Agents
             if (_stuckTimer > stuckSeconds)
             {
                 AddReward(-stuckPenalty);
+                EndDiag("stuck", _stuckTimer);
                 EndEpisode();
                 return;
             }
@@ -177,6 +275,7 @@ namespace AgenticRacing.Agents
             if (_wrongWayTimer > wrongWaySeconds)
             {
                 AddReward(-offTrackPenalty);
+                EndDiag("wrongWay", _wrongWayTimer);
                 EndEpisode();
                 return;
             }
@@ -184,9 +283,21 @@ namespace AgenticRacing.Agents
             _lapArc += fwdMetres;
             if (_lapArc >= _track.Length * 0.99f)
             {
-                AddReward(lapBonus);
+                // Flat bonus for finishing the lap, plus a bonus for how much of
+                // the MaxStep time budget is left — i.e. for finishing it fast.
+                float budgetLeft = MaxStep > 0 ? Mathf.Clamp01(1f - _episodeSteps / (float)MaxStep) : 0f;
+                AddReward(lapBonus + fastLapBonus * budgetLeft);
+                EndDiag("lap", _lapArc);
                 EndEpisode();
             }
+        }
+
+        private static readonly System.Collections.Generic.HashSet<string> _seenEndReasons = new();
+        private void EndDiag(string reason, float value)
+        {
+            if (_seenEndReasons.Add(reason))
+                Debug.Log($"[RaceAgent] first EndEpisode via '{reason}' (value={value:F2}) " +
+                          $"at stepCount={StepCount} episodeSteps={_episodeSteps}");
         }
 
         private void OnCollisionEnter(Collision collision)

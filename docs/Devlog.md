@@ -1096,3 +1096,273 @@ falta porque el player de entrenamiento no se construye más para Linux. No esto
 simplemente no los usa), así que se puede posponer su remoción hasta que se abra el Editor
 y se pueda dejar que resuelva el manifest de nuevo sin arriesgar un lock file inconsistente
 editado a mano.
+
+### El player Windows/Mono SÍ conecta — ahora falla por mismatch de observaciones (2026-09-05)
+
+En la partición Windows de la NUC: `windows-mono` instalado, `git pull`, rebuild con
+`Fase2TrainingBuild.Build` → `result=Succeeded`, `unity/Builds/train-windows/train.exe`
+generado. Venv con `mlagents==1.1.0` (Python 3.10.12, `venv` no conda). El
+`UnityTimeOutException` que bloqueó la sesión anterior **desapareció**: el player Mono
+completa el handshake gRPC (`Connected to Unity environment with package version 4.0.3 and
+communication version 1.5.0`, `Connected new brain: RaceAgent?team=0`, hiperparámetros
+impresos). El giro a Windows/Mono resolvió el bug de fondo `Grpc.Core` + IL2CPP.
+
+**Dos fallos nuevos, uno de entorno y uno de código:**
+
+1. **Entorno Python — versiones fuera del pin de mlagents 1.1.0.** El `pip install` dejó
+   `protobuf 7.36.1`, `numpy 2.2.6`, `onnx 1.22.0`, `torch 2.14.0`, cuando `mlagents==1.1.0`
+   exige `protobuf<3.21`, `numpy<1.24`, `onnx==1.15.0` y `torch>=2.1.1` (sin tope → pip
+   agarró la última). `torch 2.14` arrastró `numpy 2.x`; instalar `onnxscript` a mano
+   (para un `ModuleNotFoundError` durante el export ONNX en el crash) subió `protobuf` a
+   7.x. Síntoma final: `TypeError: Descriptors cannot be created directly` al importar
+   mlagents. Fix: recrear el venv instalando **`torch==2.2.2` (CPU) ANTES** que
+   `mlagents==1.1.0`, así pip no sube torch y resuelve el resto en rango. Con `torch 2.2.2`
+   el export ONNX usa el exportador clásico y **no** necesita `onnxscript`. `training/README.md`
+   actualizado con el orden de instalación y los pines exactos.
+
+2. **Código — la escena de entrenamiento arma el agente sobre un GameObject ya activo.**
+   `TrainingArena.BuildAgentCar()` hacía `GameObject.CreatePrimitive` (activo) →
+   `AddComponent` de Rigidbody/CarController/BehaviorParameters/DecisionRequester/
+   RayPerceptionSensorComponent3D/RaceAgent uno por uno. `Agent.OnEnable` corre
+   `InitializeSensors()` en el instante en que el componente cae sobre un objeto activo, así
+   que se ejecutaba contra un set de componentes a medio construir. Resultado: el
+   ObservationSpec negociado en el handshake quedaba con **solo el vector sensor (12
+   floats)**, pero en runtime el stream trae además el `RayPerceptionSensor` (9 rays × 3 =
+   **27 floats**). `mlagents-learn` revienta en el primer `step()` con
+   `UnityObservationException: Observation at index=0 ... Expected shape (12,) but got (27,)`
+   y `Player-0.log` se llena de `Fewer observations (0) made than vector observation size
+   (12). The observations will be padded.` (7200 veces en el smoke test).
+
+   **Fix**: en `BuildAgentCar`, `body.SetActive(false)` justo tras crear el cubo, añadir y
+   configurar **todos** los componentes en frío, y `body.SetActive(true)` una sola vez al
+   final → `InitializeSensors()` corre una vez sobre el set completo. `PlaceAt` se mueve
+   después de la activación porque necesita el `Rigidbody` que `CarController.Awake` cachea.
+   Cambio acotado a `TrainingArena.cs`, sin tocar observaciones ni recompensas.
+
+**Siguiente**: `git pull` en la NUC → rebuild `train.exe` con el mismo comando → reintentar
+`mlagents-learn ... --run-id=win-test1 --force`. Si `Player-0.log` ya no trae el "Fewer
+observations" y empieza a imprimir Step/Mean Reward, el smoke test pasó y se puede lanzar
+`--run-id=race01` con `--num-envs` ajustado a los núcleos.
+
+### Post-fix: entrena pero el env se cuelga a los ~63k steps — `runInBackground` (2026-09-05, cont.)
+
+Rebuild con el fix de ensamblado en frío + venv sano (`torch 2.2.2`). El
+`UnityObservationException` (12 vs 27) **desapareció**: `mlagents-learn` conecta, imprime
+hiperparámetros y entrena de verdad — `Step: 50000` en 62 s, ONNX exportado a
+`RaceAgent-63000.onnx`. Pero:
+
+- A los ~63k steps: `[WARNING] Restarting worker[0] after 'The Unity environment took too
+  long to respond...'` → reconecta una vez → `Environment timed out shutting down. Killing`
+  → `TimeoutError: Workers {0} stuck in waiting state`. `timers.json` confirma el patrón:
+  `env_step` 264.9 s con solo ~83 s contabilizados en hijos → ~180 s de Python **bloqueado
+  esperando** al worker de Unity.
+- `[INFO] RaceAgent. Step: 50000. ... No episode was completed since last summary` — en
+  ~50k experiencias × 9 arenas (con `MaxStep = 4000`) no cerró **ni un** episodio.
+- `Player-0.log` sigue con `Fewer observations (0) made than vector observation size (12)`
+  ×7659 — el vector sensor se escribe vacío. (El ray sensor sí manda sus 27; por eso el
+  trainer ya no crashea por shape, solo entrena con el canal vectorial en ceros.)
+
+**Causa del cuelgue (alta confianza)**: `ProjectSettings/ProjectSettings.asset` tiene
+`runInBackground: 0` y ML-Agents 4.0.3 **ya no** fuerza `Application.runInBackground = true`
+(sí lo hacían versiones viejas). `mlagents-learn` lanza `train.exe` sin foco; con
+`runInBackground` apagado, Unity estrangula el `FixedUpdate` en cuanto la ventana pierde
+foco → el canal gRPC del lado Unity se atasca → `--timeout-wait` salta. Encaja con "corre
+62 s y luego se cuelga" y con "ningún episodio completado" (la sim va a cámara lenta, tarda
+una eternidad de wall-clock en llegar a `MaxStep`).
+
+**Fix aplicado (sin tocar recompensas ni observaciones):**
+- `TrainingSceneBootstrap.Awake` y `TrainingArena.Awake`: `Application.runInBackground = true`.
+- `Fase2TrainingBuild.cs`: `PlayerSettings.runInBackground = true` antes de `BuildPlayer`
+  (horneado en el player, además del runtime).
+- `RaceAgent.cs`: tres `Debug.Log` one-shot (`Initialize`, `CollectObservations`,
+  `OnEpisodeBegin`) para que el próximo `Player-0.log` diga de una vez si el override de
+  `CollectObservations` corre, si `_track` está seteado, y con qué `centerline.Count` —
+  el "Fewer observations (0)" sigue sin explicación estática y hay que verlo en runtime.
+
+**Siguiente**: rebuild `train.exe` → `mlagents-learn ... --run-id=win-test1 --force`. Si el
+env ya no se cuelga y empieza a acumular episodios, el cuelgue era `runInBackground`.
+Pasar el nuevo `Player-0.log` (las líneas `[RaceAgent] ...`) para cerrar lo del vector
+sensor en ceros.
+
+### `runInBackground` resolvió el cuelgue; ahora: 0 episodios en 2M steps (2026-09-05, cont.)
+
+Con `runInBackground` horneado, el env **ya no se cuelga**: `mlagents-learn` entrenó estable
+a ~1000 steps/s hasta 2M+ steps sin timeout. Pero **ni un episodio completado en toda la
+corrida**, y `Player-0.log` sigue lleno de `Fewer observations (0) ... size (12)` (~1 por
+agente-step, ≈2.09M líneas).
+
+Los logs one-shot que se agregaron dicen:
+- `[RaceAgent] Initialize ok: car=True rb=True centerline=1098 racingLine=1098 width=12 maxStep=4000`
+  — `Initialize` corre bien, la pista es válida, `MaxStep` seteado.
+- `[RaceAgent] OnEpisodeBegin (first): track=True stepCount=0` — corre el primer episodio.
+- `[RaceAgent] CollectObservations (first): ...` aparece **~7200 líneas después** de que
+  empiezan los warnings de "Fewer observations". O sea: durante miles de steps el vector
+  sensor (size 12) se escribe **vacío** antes de que el override de `CollectObservations`
+  llegue a ejecutarse siquiera, y los warnings **continúan** después. Aritmética: ≈1 warning
+  por agente-step ⇒ cada agente tiene un segundo VectorSensor de size 12 que nadie llena
+  (el que `CollectObservations` llena es el otro) — apunta a **sensores duplicados** en el
+  agente armado por código, o a que el override no despacha para todos los agentes.
+
+No se pudo cerrar la causa por lectura estática (el ensamblado en frío debería haber
+evitado la doble init; `InitializeSensors` solo se llama desde `LazyInitialize`, que
+rehace la lista). Segundo build instrumentado a fondo en `RaceAgent.cs` (solo diagnóstico,
+sin tocar recompensas/observaciones):
+- primer `CollectObservations`: **dump por reflexión de `Agent.sensors`** (nombre + shape
+  de cada sensor) — confirma o descarta duplicados.
+- `OnActionReceived`: contador + log del primero y cada 20000, con `StepCount` y `fwdSpeed`
+  — confirma si corre y a qué ritmo, y si el auto se mueve.
+- `OnEpisodeBegin`: cuenta episodios, loguea los primeros 15 y cada 200, con
+  `stepCount` y `prevEpisodeSteps` — dice si los episodios se repiten y de qué largo.
+- `EndDiag`: loguea la primera vez que se dispara cada razón de fin (`offTrack`, `stuck`,
+  `wrongWay`, `lap`) — dice si alguna termina el episodio o ninguna.
+
+**Siguiente**: matar la corrida actual (entrena sobre basura), rebuild, correr 1-2 min,
+pasar las líneas `[RaceAgent] ...` del `Player-0.log`.
+
+### Diagnóstico 2: `OnActionReceived` nunca se llama; DecisionRequester agregado antes del Agent (2026-09-05, cont.)
+
+El build instrumentado descartó la hipótesis de sensores duplicados: el dump por reflexión
+dio `sensors=[TrackRays(27), VectorSensor_size12(12)]` — limpio, 2 sensores. Lo que sí
+mostró:
+
+- `[RaceAgent] OnActionReceived #1` **nunca aparece** — `OnActionReceived` no se invoca ni
+  una vez en toda la corrida.
+- `OnEpisodeBegin` se dispara para los 9 agentes al arranque y después **cicla ~cada 4000
+  academy-steps** (= `MaxStep`), siempre con `prevEpisodeSteps=0`: el episodio termina por
+  timeout de `MaxStep` sin que el auto haya movido un dedo.
+- `CollectObservations` (el override) empieza a correr recién en la línea ~7252 del log
+  (tras el primer ciclo completo de `MaxStep`); antes corre el `CollectObservations` base
+  vacío (de ahí los `Fewer observations (0)`).
+
+O sea: el pipeline de **decisión** funciona (llega `CollectObservations`), el de **acción**
+no (nunca `OnActionReceived`), y el episodio solo avanza por el contador de `MaxStep` del
+`Agent` base. El auto no se mueve → nunca sale de pista ni completa vuelta → "No episode
+completed" para siempre.
+
+**Causa probable**: `AddBehaviour` agregaba el `DecisionRequester` **antes** que el
+`RaceAgent`. `DecisionRequester` tiene `[RequireComponent(typeof(Agent))]` y
+`[DefaultExecutionOrder(-10)]`; agregarlo sin un `Agent` concreto presente hace que Unity
+intente satisfacer el require con el tipo abstracto `Agent`, y su `Awake` a -10 (que engancha
+`Academy.AgentPreStep += MakeRequests` y cachea `m_Agent = GetComponent<Agent>()`) corre
+antes de que el `Agent` real se inicialice. Si `m_Agent` queda mal cacheado,
+`MakeRequests` llama `m_Agent?.RequestAction()` sobre null cada step → `m_RequestAction`
+nunca se pone en true → `OnActionReceived` no se ejecuta jamás.
+
+**Fix aplicado** en `TrainingArena.cs`: `BehaviorParameters` + `RayPerceptionSensorComponent3D`
+primero, después `RaceAgent`, y el `DecisionRequester` **al final** (`AddDecisionRequester`),
+todo con el `body` inactivo y una sola activación. Diagnóstico ampliado en `RaceAgent.cs`:
+el primer `CollectObservations` ahora loguea `behaviorType`, `actionSpec` (C/D), y si el
+`DecisionRequester` tiene su `Agent` cacheado.
+
+**Siguiente**: rebuild → correr 1-2 min → pasar las líneas `[RaceAgent] ...`. Si aparece
+`OnActionReceived #1` y los episodios empiezan a cerrar por `stuck`/`offTrack`, el orden de
+componentes era la causa.
+
+### Smoke test OK — el reorden de componentes lo resolvió (2026-09-06)
+
+Rebuild con `DecisionRequester` agregado al final. Los logs `[RaceAgent] ...` confirman todo
+sano:
+- `CollectObservations (first): behaviorType=Default actionSpec=C3/D0 decisionRequester=present
+  drAgent=True sensors=[TrackRays(27), VectorSensor_size12(12)]`.
+- `OnActionReceived #1` aparece (antes nunca) — pipeline de acción vivo.
+- `first EndEpisode via 'stuck' ... at stepCount=151` y luego `via 'offTrack'` — los
+  episodios cierran.
+- Trainer: `Mean Reward: -1.11 / -1.22 / -1.32 / -1.08` a 50k–200k steps (antes: "No episode
+  was completed"). `fwdSpeed` en los logs sube de ~0 a ~7–10 y `prevEpisodeSteps` de 151 a
+  2000+ — la política aprende a avanzar. El reward negativo es esperado tan temprano
+  (dominan `offTrackPenalty`/`stuckPenalty`); se evalúa la forma de recompensa con la
+  corrida larga.
+- `Fewer observations (0)` **desapareció** del `Player-0.log`.
+
+Confirmado el diagnóstico anterior: `DecisionRequester` (con `[RequireComponent(typeof(Agent))]`
++ `[DefaultExecutionOrder(-10)]`) agregado antes de que exista un `Agent` concreto rompía el
+cacheo de `m_Agent` y `RequestAction()` nunca se llamaba.
+
+**Resumen de la sesión** — tres causas raíz encadenadas, todas ahora resueltas:
+1. venv de Python con versiones fuera del pin de `mlagents 1.1.0` (`torch 2.14` arrastró
+   `numpy 2.x`/`protobuf 7.x`) → recrear instalando `torch==2.2.2` (CPU) **antes** que mlagents.
+2. `ProjectSettings.runInBackground = 0` + ML-Agents 4.x ya no lo fuerza → el player se
+   estrangulaba sin foco y `mlagents-learn` lo mataba por timeout → `runInBackground = true`
+   en la escena (runtime) y en `Fase2TrainingBuild` (horneado).
+3. `TrainingArena` armaba el agente por código en un orden que ML-Agents no tolera
+   (`InitializeSensors` contra un set a medio construir; `DecisionRequester` antes del
+   `Agent`) → ensamblado en frío (`SetActive(false)` → componentes → `SetActive(true)`) y
+   `DecisionRequester` al final.
+
+**Siguiente**: lanzar la corrida real — `--run-id=race01`, `--num-envs` ajustado a los
+núcleos físicos de la NUC, `max_steps: 20000000` (ya en el YAML). Dejar los `Debug.Log` de
+diagnóstico puestos para revisar la salud de `race01` en su `Player-0.log`; quitarlos antes
+de las corridas de población de Fase 3. Devolver `results/race01/` (con `RaceAgent.onnx` +
+`events.out.tfevents.*`), run-id, nº de pasos y el commit del player. Con eso arranca la
+iteración 2 de Fase 2 (análisis de curvas de TensorBoard, tuneo de recompensas, validación
+del `.onnx` en WebGL).
+
+### Análisis de `race01` — corrida completa de Fase 2 iter 1 (2026-09-06)
+
+20M steps, `num_envs=4`, ~2.5–3 h de wall-clock en la NUC. `results/race01/RaceAgent.onnx`
+= checkpoint del step 20000027, reward de ventana 3.89. **Health perfecta**: `Fewer
+observations` = 0 en los 4 `Player-*.log`, sin excepciones, y las tres razones de fin
+(`lap`, `offTrack`, `stuck`) se disparan — o sea, los autos **sí completan vueltas** a veces.
+
+**Curvas (de `events.out.tfevents`):**
+
+| Métrica | 50k | ~1.85M | 20M |
+|---|---|---|---|
+| `Environment/Cumulative Reward` | −1.11 | **3.35** | 3.74 |
+| `Environment/Episode Length` | 42 | **179** | 143 |
+| `Policy/Entropy` | 1.42 | 1.23 | 0.82 |
+| `Losses/Value Loss` | 0.12 | 0.14 | 0.27 |
+
+**Lectura:**
+- **Convergió a ~1.85M steps** y de ahí quedó plano/ruidoso entre 3.3 y 3.7 (con caídas
+  puntuales de ventana a 0.6–1.8) durante los **18M steps restantes**. ~85% del cómputo de
+  esta corrida no aportó nada. Para iterar, `max_steps ≈ 4M` sobra.
+- `Episode Length` tocó techo (~179) a 1.85M y después **bajó despacio** a ~143 mientras el
+  reward seguía plano, y `Value Loss` **subió** (0.12→0.27): la política cayó temprano en un
+  óptimo local y el resto de la corrida solo osciló. Señal de que la función de recompensa
+  no tiene suficiente estructura para empujar más allá de "conduce más o menos".
+- Estimado ~10–16% de episodios "buenos" (largos / vuelta completa), el resto `stuck`/`offTrack`.
+- **Lejos del criterio de aceptación de Fase 2** ("varias vueltas consecutivas sin salirse
+  en 3 seeds nuevas"). Es una línea base válida de iter 1, no un piloto entrenable.
+
+**Nota importante para el tuneo**: los parámetros de recompensa de `RaceAgent`
+(`progressRewardPerMetre`, `lapBonus`, etc.) son `[SerializeField]` pero **la escena los
+arma por código sin overrides** (`TrainingArena.BuildAgentCar` hace `AddComponent<RaceAgent>()`
+y nada más), así que en la práctica corren con los **defaults del C#**. Tunearlos = editar
+`RaceAgent.cs` y reconstruir el player. La nota de `training/README.md` que dice
+"serializado, sin recompilar" es incorrecta para este setup — corregir.
+
+**Siguiente (iter 2 de Fase 2)**: bajar `max_steps` a ~4M; reforzar la recompensa para
+premiar velocidad / seguir la trazada (candidatos: `progressRewardPerMetre` ponderado por
+velocidad, `lapBonus` mayor, shaping denso con el error de rumbo y offset lateral que ya
+están en las observaciones); quizá `beta` 0.005→0.01 por exploración. Después: validar el
+`.onnx` en WebGL sobre 3 seeds no vistas (criterio de aceptación + riesgo de Fase 0).
+
+### Fase 2 iter 2 — reward shaping aplicado (2026-09-06)
+
+Cambios sobre `RaceAgent.cs` (defaults del C#, ver nota de la entrada anterior):
+- `speedRewardPerSec = 0.03` — premio por segundo escalado por la fracción de velocidad
+  hacia adelante (`ForwardSpeed / MaxSpeed`). Ataca directo el óptimo local de race01
+  ("avanzar despacio"): ahora ir rápido paga aparte del progreso.
+- `lineFollowRewardPerSec = 0.02` — shaping denso: premia ir alineado con la tangente de
+  la trazada ideal **y** cerca de ella. **Gateado por velocidad** (`fwdFrac > 0.05` y el
+  término se multiplica por `fwdFrac`) para que no se pueda farmear quieto y alineado.
+- `lapBonus` 5 → 12; nuevo `fastLapBonus = 8` escalado por `1 - episodeSteps/MaxStep`
+  (presupuesto de tiempo sin gastar al cerrar la vuelta) → premia cerrar rápido.
+
+`training/config/race_ppo.yaml`:
+- `max_steps` 20M → **4M** (race01 convergió a 1.85M).
+- `beta` 5e-3 → **1e-2** (más exploración, para no recaer en el óptimo local).
+- `checkpoint_interval` 500k → 250k, `keep_checkpoints` 10 → 20 (más resolución para
+  elegir snapshot en una corrida corta).
+
+`training/README.md`: corregida la nota que decía "serializado, sin recompilar" — hay que
+recompilar; tabla de campos de recompensa actualizada con los nuevos.
+
+Diagnósticos `[RaceAgent] ...` en `RaceAgent.cs` se dejan puestos para revisar la salud de
+race02; se quitan antes de las corridas de población de Fase 3.
+
+**Siguiente**: rebuild `train.exe` → `mlagents-learn ... --run-id=race02 --num-envs=4`.
+Qué mirar en TensorBoard: que `Cumulative Reward` **no** se aplane a 1.85M como race01, que
+`Episode Length` deje de decaer, y que el % de fines por `lap` suba. Pendiente aparte:
+validar un `.onnx` en WebGL sobre 3 seeds no vistas (criterio de aceptación de Fase 2).

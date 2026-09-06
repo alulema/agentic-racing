@@ -45,6 +45,12 @@ namespace AgenticRacing.EditorTools
             // EditorUserBuildSettings and needs the Dedicated Server module.
             EditorUserBuildSettings.standaloneBuildSubtarget = StandaloneBuildSubtarget.Player;
 
+            // mlagents-learn runs the player unfocused; Unity throttles FixedUpdate
+            // to a crawl without this and the trainer times the environment out.
+            // The scene also sets Application.runInBackground at runtime, but bake
+            // it into the player too.
+            PlayerSettings.runInBackground = true;
+
             // Force Mono for Standalone: ML-Agents' communicator needs it (see
             // class doc above). Requires "Windows Build Support (Mono)" (§9).
             PlayerSettings.SetScriptingBackend(NamedBuildTarget.Standalone, ScriptingImplementation.Mono2x);
