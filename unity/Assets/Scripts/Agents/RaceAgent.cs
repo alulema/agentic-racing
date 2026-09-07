@@ -81,6 +81,13 @@ namespace AgenticRacing.Agents
         private bool _diagCounted;   // did EndDiag already tally the current episode?
         private float _wallJamTimer, _escapeUntil, _steerSmooth;   // heuristic control state
 
+        // Death-trajectory ring buffer (diagnostics only).
+        private const int TrajLen = 20;
+        private readonly float[] _trajLat = new float[TrajLen], _trajSteer = new float[TrajLen],
+                                 _trajSpeed = new float[TrajLen], _trajBrake = new float[TrajLen],
+                                 _trajTurn = new float[TrajLen];
+        private int _trajHead = -1;
+
         private int _episodeSteps;   // steps taken in the current lap/episode
 
         // Fase 2 bring-up diagnostics. Remove once training is stable.
@@ -305,6 +312,18 @@ namespace AgenticRacing.Agents
             _progress.Update(_rb.position);
             float fwdMetres = _progress.ConsumeForwardDelta();
 
+            // Rolling ~3 s trajectory, dumped on death (EndDiag) to see WHY an
+            // episode failed — diagnostics only. Sampled every 8 steps (~0.16 s).
+            if (_episodeSteps % 8 == 0)
+            {
+                _trajHead = (_trajHead + 1) % TrajLen;
+                _trajLat[_trajHead] = _progress.LateralOffset;
+                _trajSteer[_trajHead] = _car.Steer;
+                _trajSpeed[_trajHead] = _car.ForwardSpeed;
+                _trajBrake[_trajHead] = _car.Brake;
+                _trajTurn[_trajHead] = Mathf.Abs(CenterlineTurnDeg(0f, 24f));
+            }
+
             AddReward(fwdMetres * progressRewardPerMetre);
 
             // Speed shaping around a curvature-appropriate TARGET speed: reward
@@ -438,13 +457,27 @@ namespace AgenticRacing.Agents
             _endTotal++;
             _lapArcSum += _lapArc;
 
-            // First ~24 endings: where and how did it die? Pins down whether the
-            // policy/heuristic dies at a repeatable spot on the lap (a specific
-            // corner) and in what state.
+            // First ~24 endings: where and how did it die, plus the ~3 s
+            // trajectory into the death (oldest -> newest), to tell apart
+            // "drifted off understeering" / "spun" / "controller didn't react".
             if (_endTotal <= 24)
+            {
                 Debug.Log($"[RaceAgent] end #{_endTotal} '{reason}': lap%={_progress.Distance01 * 100f:F0} " +
                           $"lapArc={_lapArc:F0}m steps={_episodeSteps} speed={_car.ForwardSpeed:F1} " +
-                          $"lateral={_progress.LateralOffset:F1}/{_halfWidth:F1}m");
+                          $"lateral={_progress.LateralOffset:F1}/{_halfWidth:F1}m\n" +
+                          $"    lat  : {TrajStr(_trajLat, "F1")}\n" +
+                          $"    steer: {TrajStr(_trajSteer, "F2")}\n" +
+                          $"    spd  : {TrajStr(_trajSpeed, "F0")}\n" +
+                          $"    brk  : {TrajStr(_trajBrake, "F2")}\n" +
+                          $"    turn : {TrajStr(_trajTurn, "F0")}");
+            }
+            System.Array.Clear(_trajLat, 0, TrajLen);
+            System.Array.Clear(_trajSteer, 0, TrajLen);
+            System.Array.Clear(_trajSpeed, 0, TrajLen);
+            System.Array.Clear(_trajBrake, 0, TrajLen);
+            System.Array.Clear(_trajTurn, 0, TrajLen);
+            _trajHead = -1;
+
             _endRecent.Enqueue(reason);
             while (_endRecent.Count > EndWindow) _endRecent.Dequeue();
             if (_endTotal % EndWindow == 0)
@@ -462,6 +495,19 @@ namespace AgenticRacing.Agents
         {
             if (collision.gameObject.CompareTag(TrackEdgeColliders.EdgeTag))
                 AddReward(-wallHitPenalty);
+        }
+
+        // Ring buffer oldest -> newest as a compact string (diagnostics only).
+        private string TrajStr(float[] buf, string fmt)
+        {
+            if (_trajHead < 0) return "(none)";
+            var sb = new System.Text.StringBuilder();
+            for (int k = 1; k <= TrajLen; k++)
+            {
+                if (k > 1) sb.Append(' ');
+                sb.Append(buf[(_trajHead + k) % TrajLen].ToString(fmt));
+            }
+            return sb.ToString();
         }
 
         /// <summary>
