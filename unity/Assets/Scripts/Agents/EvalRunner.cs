@@ -46,10 +46,12 @@ namespace AgenticRacing.Agents
             int n = 0;
             foreach (var agent in FindObjectsByType<RaceAgent>(FindObjectsSortMode.None))
             {
-                var bp = agent.GetComponent<BehaviorParameters>();
-                bp.BehaviorType = BehaviorType.InferenceOnly;
+                // Set the model BEFORE switching Behavior Type: flipping to
+                // InferenceOnly while Model is still null throws
+                // "Can't use Behavior Type InferenceOnly without a model".
                 // ML-Agents' InferenceDevice: Burst == CPU inference (no CPU member).
                 agent.SetModel("RaceAgent", model, InferenceDevice.Burst);
+                agent.GetComponent<BehaviorParameters>().BehaviorType = BehaviorType.InferenceOnly;
                 var car = agent.GetComponent<CarController>();
                 if (car != null) _cars.Add(car);
                 n++;
@@ -57,7 +59,13 @@ namespace AgenticRacing.Agents
 
             RaceAgent.AnyEpisodeEnded += OnEpisodeEnded;
             _startTime = Time.time;
-            Debug.Log($"[Eval] model=Resources/{modelResource} agents={n} trackLen={_trackLen:F0}m window={evalSeconds:F0}s");
+            Debug.Log($"[Eval] model=Resources/{modelResource} agents={n} cars={_cars.Count} " +
+                      $"trackLen={_trackLen:F0}m window={evalSeconds:F0}s");
+            if (n == 0)
+            {
+                Debug.LogError("[Eval] no RaceAgent found in the scene");
+                Application.Quit(1);
+            }
         }
 
         private void OnDestroy() => RaceAgent.AnyEpisodeEnded -= OnEpisodeEnded;
