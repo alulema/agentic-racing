@@ -48,7 +48,8 @@ namespace AgenticRacing.Agents
             {
                 var bp = agent.GetComponent<BehaviorParameters>();
                 bp.BehaviorType = BehaviorType.InferenceOnly;
-                agent.SetModel("RaceAgent", model, InferenceDevice.CPU);
+                // ML-Agents' InferenceDevice: Burst == CPU inference (no CPU member).
+                agent.SetModel("RaceAgent", model, InferenceDevice.Burst);
                 var car = agent.GetComponent<CarController>();
                 if (car != null) _cars.Add(car);
                 n++;
