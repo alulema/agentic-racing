@@ -76,7 +76,7 @@ namespace AgenticRacing.Agents
         private float _wrongWayTimer;
         private bool _stuckArmed;    // stuck check only bites once the car has actually got moving
         private bool _diagCounted;   // did EndDiag already tally the current episode?
-        private float _wallJamTimer, _escapeUntil;   // heuristic reverse-off-the-wall state
+        private float _wallJamTimer, _escapeUntil, _steerSmooth;   // heuristic control state
 
         private int _episodeSteps;   // steps taken in the current lap/episode
 
@@ -155,6 +155,9 @@ namespace AgenticRacing.Agents
             _stuckTimer = 0f;
             _wrongWayTimer = 0f;
             _stuckArmed = false;
+            _wallJamTimer = 0f;
+            _escapeUntil = 0f;
+            _steerSmooth = 0f;
         }
 
         public override void CollectObservations(VectorSensor sensor)
@@ -468,18 +471,23 @@ namespace AgenticRacing.Agents
                 return;
             }
 
-            // Pure-pursuit toward a centre-biased lookahead point. Short lookahead
-            // when slow so the target can't sit behind a wall or across the track.
-            float lookaheadM = speed < 5f ? 9f : Mathf.Clamp(10f + speed * 1.2f, 12f, 55f);
+            // Pure-pursuit toward a centre-biased lookahead point. Lookahead never
+            // drops below ~15 m: a short one oscillates, and the arcade grip model
+            // bleeds forward speed on every steer wobble, so the car could never
+            // build speed (eval: 5 m/s crawl, meanAbsSteer 0.18). The steering
+            // command is also low-pass filtered for the same reason.
+            float lookaheadM = Mathf.Clamp(15f + speed * 1.4f, 15f, 50f);
             int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
             Vector3 aim = Vector3.Lerp(line[(s + laSteps) % n], center[(s + laSteps) % n], 0.5f);
             Vector3 toTarget = aim - _rb.position;
             toTarget.y = 0f;
             float headingErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
 
-            float crossCorrDeg = Mathf.Clamp(carOffLeft * 3f, -25f, 25f);  // left of centre -> steer right (+)
+            float crossCorrDeg = Mathf.Clamp(carOffLeft * 2.5f, -22f, 22f);  // left of centre -> steer right (+)
 
-            a[0] = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 14f, -1f, 1f);
+            float rawSteer = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 16f, -1f, 1f);
+            _steerSmooth = Mathf.Lerp(_steerSmooth, rawSteer, 0.4f);
+            a[0] = _steerSmooth;
 
             // Sharpest heading change of the line anywhere in the next ~55 m =>
             // the corner we are about to reach => target entry speed.
