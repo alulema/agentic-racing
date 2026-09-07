@@ -471,27 +471,11 @@ namespace AgenticRacing.Agents
                 return;
             }
 
-            // Pure-pursuit toward a centre-biased lookahead point. Lookahead never
-            // drops below ~15 m: a short one oscillates, and the arcade grip model
-            // bleeds forward speed on every steer wobble, so the car could never
-            // build speed (eval: 5 m/s crawl, meanAbsSteer 0.18). The steering
-            // command is also low-pass filtered for the same reason.
-            float lookaheadM = Mathf.Clamp(15f + speed * 1.4f, 15f, 50f);
-            int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
-            Vector3 aim = Vector3.Lerp(line[(s + laSteps) % n], center[(s + laSteps) % n], 0.5f);
-            Vector3 toTarget = aim - _rb.position;
-            toTarget.y = 0f;
-            float headingErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
-
-            float crossCorrDeg = Mathf.Clamp(carOffLeft * 2.5f, -22f, 22f);  // left of centre -> steer right (+)
-
-            float rawSteer = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 16f, -1f, 1f);
-            _steerSmooth = Mathf.Lerp(_steerSmooth, rawSteer, 0.4f);
-            a[0] = _steerSmooth;
-
-            // Sharpest heading change of the line anywhere in the next ~55 m =>
-            // the corner we are about to reach => target entry speed.
-            int scan = Mathf.Max(2, Mathf.RoundToInt(55f / spacing));
+            // Sharpest heading change of the line anywhere in the next ~60 m =>
+            // the corner we're about to reach => target entry speed. Slow HARD
+            // for real corners; the arcade car can turn a ~3 m radius at 6 m/s,
+            // so if it actually slows it makes any corner.
+            int scan = Mathf.Max(2, Mathf.RoundToInt(60f / spacing));
             int seg = Mathf.Max(1, Mathf.RoundToInt(8f / spacing));
             float turnAheadDeg = 0f;
             for (int k = 0; k < scan; k += seg)
@@ -501,12 +485,36 @@ namespace AgenticRacing.Agents
                 e0.y = e1.y = 0f;
                 turnAheadDeg = Mathf.Max(turnAheadDeg, Mathf.Abs(Vector3.SignedAngle(e0, e1, Vector3.up)));
             }
-            float targetSpeed = Mathf.Lerp(maxSpeed * 0.42f, maxSpeed * 0.11f,
-                                           Mathf.Clamp01(turnAheadDeg / 55f));
+            float targetSpeed = Mathf.Lerp(maxSpeed * 0.40f, maxSpeed * 0.10f,
+                                           Mathf.Clamp01(turnAheadDeg / 45f));
 
-            if (speed < targetSpeed - 1f) { a[1] = 1f; a[2] = 0f; }
-            else if (speed > targetSpeed + 1f) { a[1] = 0f; a[2] = Mathf.Clamp01((speed - targetSpeed) / 5f); }
-            else { a[1] = 0.4f; a[2] = 0f; }
+            if (speed < targetSpeed - 0.5f) { a[1] = 1f; a[2] = 0f; }
+            else if (speed > targetSpeed + 0.5f) { a[1] = 0f; a[2] = Mathf.Clamp01((speed - targetSpeed) / 3f); }
+            else { a[1] = 0.6f; a[2] = 0f; }
+
+            // Pure-pursuit steering. Lookahead scales with speed but stays short
+            // enough to actually turn into corners; aggressive gain, no low-pass
+            // (the filter lagged corner entry and the car ran wide into the wall).
+            float lookaheadM = Mathf.Clamp(8f + speed * 0.8f, 8f, 32f);
+            int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
+            Vector3 aim = Vector3.Lerp(line[(s + laSteps) % n], center[(s + laSteps) % n], 0.4f);
+            Vector3 toTarget = aim - _rb.position;
+            toTarget.y = 0f;
+            float headingErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
+            float crossCorrDeg = Mathf.Clamp(carOffLeft * 3f, -25f, 25f);  // left of centre -> steer right (+)
+            _steerSmooth = a[0] = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 11f, -1f, 1f);
+
+            if (_dbgHeurT <= Time.time)
+            {
+                _dbgHeurT = Time.time + 1f;
+                float slipDeg = _rb.linearVelocity.sqrMagnitude > 0.5f
+                    ? Vector3.Angle(_rb.linearVelocity, transform.forward) : 0f;
+                Debug.Log($"[Heur] spd={speed:F1} |v|={_rb.linearVelocity.magnitude:F1} slip={slipDeg:F0} " +
+                          $"turnAhead={turnAheadDeg:F0} tgtSpd={targetSpeed:F1} " +
+                          $"str={a[0]:F2} thr={a[1]:F2} brk={a[2]:F2} lapArc={_lapArc:F0} off={carOffLeft:F1}");
+            }
         }
+
+        private static float _dbgHeurT;
     }
 }
