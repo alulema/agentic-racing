@@ -69,6 +69,7 @@ namespace AgenticRacing.Agents
         private float _wrongWayTimer;
         private bool _stuckArmed;    // stuck check only bites once the car has actually got moving
         private bool _diagCounted;   // did EndDiag already tally the current episode?
+        private float _wallJamTimer, _escapeUntil;   // heuristic reverse-off-the-wall state
 
         private int _episodeSteps;   // steps taken in the current lap/episode
 
@@ -406,10 +407,16 @@ namespace AgenticRacing.Agents
             Vector3 left = new Vector3(-_progress.Tangent.z, 0f, _progress.Tangent.x);
             float carOffLeft = Vector3.Dot(_rb.position - center[s], left); // + = car left of centre
 
-            // Reverse-off-the-wall: slow and jammed against an edge -> back straight
-            // out, then normal control resumes once it is moving again.
-            if (speed < 2f && Mathf.Abs(carOffLeft) > 0.65f * _halfWidth)
+            // Reverse-off-the-wall, tightly gated so it can't become a low-speed
+            // limit cycle (the first version reversed on any slow moment near the
+            // edge and never re-accelerated). Only fires when genuinely pinned —
+            // almost stopped AND hard against an edge for a sustained moment —
+            // then reverses for one short time-boxed burst.
+            bool pinned = speed < 1f && Mathf.Abs(carOffLeft) > 0.8f * _halfWidth;
+            _wallJamTimer = pinned ? _wallJamTimer + Time.fixedDeltaTime : 0f;
+            if (Time.time < _escapeUntil || _wallJamTimer > 0.5f)
             {
+                if (_wallJamTimer > 0.5f) { _escapeUntil = Time.time + 0.8f; _wallJamTimer = 0f; }
                 a[0] = Mathf.Sign(carOffLeft) * 0.4f;
                 a[1] = -1f;
                 a[2] = 0f;

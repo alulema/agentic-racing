@@ -1600,3 +1600,40 @@ episodio) prohíbe la única maniobra de escape que usaría un humano.
 la física era el bloqueo y toca reentrenar con estos cambios (nuevo run-id). Si sigue
 muriendo → mirar `TrackAnalysis` (curvatura máxima que valida Fase 1 / si el generador
 hace curvas imposibles).
+
+### Gate resuelto: la pista ES manejable — a corrida limpia (race06) (2026-09-07)
+
+Tercer `eval -heuristic`, con los arreglos de física/recompensa de `e718c7b`. Sigue
+imperfecto (18/24 `stuck`) pero apareció la señal que importa:
+
+    end #20  maxStep  lapArc=1691m  steps=4000  speed=21.0  lateral=-0.8
+
+**Un auto manejó 1691 m — el 82% de la vuelta — a 21 m/s** y todavía iba al acabarse el
+tiempo. Con la física anterior eso era imposible. Otros llegaron a 383/418/506/509 m. Los
+`lateral` de muerte bajaron de 4–7 (contra el muro) a ~3 (media pista): ya no es
+"clavado al muro", es "perdió velocidad y no re-aceleró".
+
+**Conclusión**: el entorno es aprendible; el bloqueo era la física de muros no
+recuperables, ya arreglada. Los fallos que quedan en la heurística son de la heurística
+(herramienta de diagnóstico), no del entorno — un agente RL aprende su propia recuperación.
+
+**Decisión (acordada con el dueño del proyecto)**: no seguir con micro-iteraciones de
+recompensa. Camino (a): una corrida limpia y larga con los arreglos actuales, y recién
+si *esa* se estanca, tuning de RL deliberado.
+
+Cambios:
+- `RaceAgent.Heuristic`: la reversa de escape ahora está fuertemente acotada
+  (`_wallJamTimer` > 0.5 s genuinamente clavado → un burst de 0.8 s vía `_escapeUntil`),
+  para que no sea un ciclo límite de baja velocidad (v1 reversaba en cualquier momento
+  lento cerca del borde y no re-aceleraba nunca; `#14`: 48 s parado).
+- `race_ppo.yaml`: `max_steps` 6M → 10M, run-id race06.
+
+Pendiente para *después* de race06 (no ahora): sumar curvatura hacia adelante al vector de
+observaciones (cambio de rumbo de la centerline a ~15/30/50 m) — el agente hoy solo "ve"
+con raycasts a 40 m y no anticipa curvas. Se difiere para aislar el efecto de los arreglos
+de física/recompensa primero.
+
+**Siguiente**: rebuild `train.exe` (trae física + recompensa nuevas, ningún build de
+entrenamiento las tiene aún) → `--run-id=race06 --num-envs=4` (~1.7 h). No tocar nada
+hasta que termine. Mirar: `end reasons` (¿baja `stuck`/`offTrack`, sube `lap`?),
+`Cumulative Reward` (¿pasa el plateau de ~4-5?), `Episode Length` (¿sube sostenido?).
