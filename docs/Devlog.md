@@ -1711,3 +1711,27 @@ el 82% de la vuelta.
 
 Mirar en race08: ¿el agente aprende a frenar y pasar curvas (baja `offTrack`, sube `lap`)?
 Si BC+GAIL tampoco lo saca → curriculum + red más grande.
+
+### El log [Heur] resolvió el misterio: la heurística SÍ maneja (2026-09-07)
+
+`eval.exe -heuristic` con el log `[Heur]` (1x/s): los `[Heur]` muestran autos a **18-22 m/s
+sostenido, `slip` 0-2°** (sin derrape), frenando suave para curvas, `lapArc` subiendo
+parejo. `end #1 'maxStep': lapArc=1595m speed=19.2` — un auto hizo **1595 m a ~20 m/s los
+80 s completos**. La heurística maneja bien.
+
+El `meanForwardSpeed=5.3` del REPORT era un promedio engañoso: **solo ~2-3 de los 9 autos
+manejan; los otros 6-7 quedan en diente de sierra cerca del spawn** (`end #2`: 154 m y
+parado 70 s). Pegan una curva que no pasan → pared → se frenan → el recovery reversa 0.7 s,
+los saca apenas, vuelven a frenarse — y como el chequeo de `stuck` usa `Abs(velocidad)`,
+los bursts de reversa (-3 m/s) le resetean el timer: nunca terminan el episodio, sobreviven
+80 s sin avanzar, y arrastran el promedio (y llenarían las demos de basura).
+
+**Fix — terminación por estancamiento de progreso** (`RaceAgent.OnActionReceived`):
+`stallSeconds = 5`, `stallMinMetres = 8` — si el auto cubrió < 8 m de pista en los últimos
+5 s (y ya arrancó, `_episodeSteps > 60`), `EndEpisode` con penalización. Independiente de
+la velocidad instantánea, así que el sawtooth no lo esquiva. Los autos malos mueren rápido
+→ **respawnean** → la mayoría de spawns dan buen manejo → demos mayormente de 20 m/s. Sirve
+también al RL (mata la degeneración sawtooth si el agente la descubriera).
+
+**Siguiente**: rebuild eval → `eval.exe -heuristic` para confirmar que ahora el REPORT
+tiene `meanForwardSpeed` ~15-20 y `meanLapProgress` alto → `eval.exe -record` → race08.

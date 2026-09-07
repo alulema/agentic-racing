@@ -57,6 +57,8 @@ namespace AgenticRacing.Agents
         [SerializeField] private float offTrackMargin = 2.0f;   // metres past the edge = fully off
         [SerializeField] private float stuckSpeed = 0.5f;       // m/s
         [SerializeField] private float stuckSeconds = 8.0f;     // hard cutoff only — a genuinely dead car, not a tactic
+        [SerializeField] private float stallSeconds = 5.0f;     // window for the progress-stall check
+        [SerializeField] private float stallMinMetres = 8.0f;   // must cover at least this much track per window
         [SerializeField] private float wrongWaySeconds = 4.5f;
         [SerializeField] private float spawnHeadingNoiseDeg = 10f;
         [SerializeField] private float spawnLateralNoise = 2.0f;
@@ -75,6 +77,7 @@ namespace AgenticRacing.Agents
         private float _stuckTimer;
         private float _wrongWayTimer;
         private bool _stuckArmed;    // stuck check only bites once the car has actually got moving
+        private float _stallArc, _stallTimer;   // progress-stall check state
         private bool _diagCounted;   // did EndDiag already tally the current episode?
         private float _wallJamTimer, _escapeUntil, _steerSmooth;   // heuristic control state
 
@@ -155,6 +158,8 @@ namespace AgenticRacing.Agents
             _stuckTimer = 0f;
             _wrongWayTimer = 0f;
             _stuckArmed = false;
+            _stallArc = 0f;
+            _stallTimer = 0f;
             _wallJamTimer = 0f;
             _escapeUntil = 0f;
             _steerSmooth = 0f;
@@ -368,6 +373,24 @@ namespace AgenticRacing.Agents
                 EndDiag("wrongWay", _wrongWayTimer);
                 EndEpisode();
                 return;
+            }
+
+            // Progress stall: covered < stallMinMetres of track in the last
+            // stallSeconds. Catches the sawtooth-near-spawn and slow circling that
+            // the speed-based 'stuck' check misses (brief reverse bursts keep
+            // resetting it). Independent of instantaneous speed.
+            _stallTimer += Time.fixedDeltaTime;
+            if (_stallTimer >= stallSeconds)
+            {
+                if (_episodeSteps > 60 && _lapArc - _stallArc < stallMinMetres)
+                {
+                    AddReward(-offTrackPenalty);
+                    EndDiag("stall", _lapArc - _stallArc);
+                    EndEpisode();
+                    return;
+                }
+                _stallArc = _lapArc;
+                _stallTimer = 0f;
             }
 
             _lapArc += fwdMetres;
