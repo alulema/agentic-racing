@@ -449,25 +449,28 @@ namespace AgenticRacing.Agents
 
             Vector3 left = new Vector3(-_progress.Tangent.z, 0f, _progress.Tangent.x);
             float carOffLeft = Vector3.Dot(_rb.position - center[s], left); // + = car left of centre
+            Vector3 trackDir = _progress.Tangent;
 
-            // Reverse-off-the-wall, tightly gated so it can't become a low-speed
-            // limit cycle (the first version reversed on any slow moment near the
-            // edge and never re-accelerated). Only fires when genuinely pinned —
-            // almost stopped AND hard against an edge for a sustained moment —
-            // then reverses for one short time-boxed burst.
-            bool pinned = speed < 1f && Mathf.Abs(carOffLeft) > 0.8f * _halfWidth;
-            _wallJamTimer = pinned ? _wallJamTimer + Time.fixedDeltaTime : 0f;
-            if (Time.time < _escapeUntil || _wallJamTimer > 0.5f)
+            // Recovery: slow for a sustained moment anywhere (pinned on a wall, or
+            // circling mid-track because it chased a lookahead point across the
+            // track) -> a short reverse burst steering to line up with the local
+            // track direction, then hand back to normal control. Covers both
+            // failure modes seen in the -heuristic eval.
+            bool slow = speed < 1.5f;
+            _wallJamTimer = slow ? _wallJamTimer + Time.fixedDeltaTime : 0f;
+            if (Time.time < _escapeUntil || _wallJamTimer > 1.2f)
             {
-                if (_wallJamTimer > 0.5f) { _escapeUntil = Time.time + 0.8f; _wallJamTimer = 0f; }
-                a[0] = Mathf.Sign(carOffLeft) * 0.4f;
+                if (_wallJamTimer > 1.2f) { _escapeUntil = Time.time + 0.7f; _wallJamTimer = 0f; }
+                float noseErr = Vector3.SignedAngle(transform.forward, trackDir, Vector3.up);
+                a[0] = Mathf.Clamp(-noseErr / 20f, -1f, 1f); // reversing inverts steer sense
                 a[1] = -1f;
                 a[2] = 0f;
                 return;
             }
 
-            // Pure-pursuit toward a centre-biased lookahead point.
-            float lookaheadM = Mathf.Clamp(10f + speed * 1.2f, 12f, 55f);
+            // Pure-pursuit toward a centre-biased lookahead point. Short lookahead
+            // when slow so the target can't sit behind a wall or across the track.
+            float lookaheadM = speed < 5f ? 9f : Mathf.Clamp(10f + speed * 1.2f, 12f, 55f);
             int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
             Vector3 aim = Vector3.Lerp(line[(s + laSteps) % n], center[(s + laSteps) % n], 0.5f);
             Vector3 toTarget = aim - _rb.position;

@@ -1674,3 +1674,40 @@ heurística** (obliga a reentrenar de cero, cambia el vector de observación):
 plano tras esto → toca curriculum (empezar en seeds de baja curvatura) y/o red más grande
 (hoy 256×2). Si mejora → eval con el harness (`meanBrake` > 0, `meanLapProgress` alto) y a
 cerrar Fase 2.
+
+### race07 = ganancia chica; camino A: imitación desde la heurística (2026-09-07)
+
+`race07` (10M, +obs de anticipación + recompensa de velocidad objetivo): Cumulative Reward
+plateau **~6.5** (era ~4.8 en race06), **Value Loss 0.22 estable** (era 0.52 subiendo),
+`lap` en `end reasons` 2% → **3%**. Las observaciones de curvatura sí ayudaron (el crítico
+entiende el mundo, el reward subió ~40%), pero el fallo central no se movió: `offTrack` 97%,
+`mean lapArc` ~213 m.
+
+Diagnóstico firme: **hard-exploration**. La recompensa ya es correcta (race07 lo probó); el
+agente no *descubre* la maniobra de curva (frenar→girar→acelerar, ~1-2 s coordinados)
+porque el 97% de los intentos mueren en <2 s. No se arregla con más shaping.
+
+**Camino A (elegido): imitación desde la heurística.** Ya tenemos un "profesor" que hace
+el 82% de la vuelta.
+
+- `RaceAgent.Heuristic` endurecido: recovery más amplio — lento en cualquier lado por
+  >1.2 s (no solo contra un muro) → burst de reversa alineándose con la dirección local de
+  pista; lookahead corto (9 m) cuando va lento para no perseguir un punto detrás de un muro
+  o cruzado. Ataca los dos modos de fallo del eval (clavado al muro / círculo mediopista).
+- `EvalRunner` gana `-record`: implica `-heuristic`, corre 300 s, adjunta un
+  `DemonstrationRecorder` a cada agente → `Builds/eval-windows/demos/RaceHeuristic_*.demo`.
+  `Fase2EvalBuild` no cambia (el flag es de runtime).
+- `race_ppo.yaml`: bloques `behavioral_cloning` (`demo_path: training/demos`, `strength 0.5`,
+  `steps 2M`) + `gail` (`strength 0.15`, `use_actions: true`). run-id race08.
+- `training/demos/` (con `.gitkeep`); `*.demo` gitignoreado (datos).
+- `training/README.md` §6: workflow de grabación + entrenamiento con imitación.
+
+**Siguiente**:
+1. rebuild eval → `eval.exe -record` → copiar `demos\*.demo` a `training\demos\`.
+2. (opcional pero recomendado) `eval.exe -heuristic` para ver si el recovery endurecido
+   subió el % de vuelta de la heurística — mejor profesor = mejores demos.
+3. rebuild `train.exe` (trae el Heuristic nuevo, aunque no se use en training) →
+   `--run-id=race08 --num-envs=4`.
+
+Mirar en race08: ¿el agente aprende a frenar y pasar curvas (baja `offTrack`, sube `lap`)?
+Si BC+GAIL tampoco lo saca → curriculum + red más grande.

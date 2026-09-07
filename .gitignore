@@ -77,3 +77,6 @@ dist/
 # ---- OS cruft ----
 .DS_Store
 Thumbs.db
+
+# Imitation-learning demonstrations (grabadas con eval.exe -record; datos, no fuente)
+/training/demos/*.demo

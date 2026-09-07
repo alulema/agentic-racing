@@ -161,6 +161,35 @@ Sin `-evalModel` usa `AGENTIC_EVAL_MODEL` o, por defecto,
 `results/race04/RaceAgent.onnx`. Para comparar dos modelos, repetir con otro
 `-evalModel` (cada build hornea uno).
 
+Flags del `eval.exe`:
+- `-heuristic` — ignora el modelo y corre `RaceAgent.Heuristic` (el seguidor
+  scripted): la referencia "¿esta pista se puede manejar?".
+- `-record` — implica `-heuristic`, corre 300 s y adjunta un `DemonstrationRecorder`
+  a cada agente. Escribe `.demo` en `unity\Builds\eval-windows\demos\`.
+
+## 6. Imitación desde la heurística (BC + GAIL)
+
+Cuando el RL no despega solo (race01-07: se estancaba en ~10% de vuelta por
+hard-exploration), se arranca la política desde la heurística, que sí maneja
+la mayor parte de la vuelta.
+
+```powershell
+# 1. grabar demostraciones (misma build que la §5)
+unity\Builds\eval-windows\eval.exe -record -logFile eval-record.log
+# -> unity\Builds\eval-windows\demos\RaceHeuristic_*.demo  (uno por agente)
+
+# 2. copiarlas a donde el YAML las busca
+Copy-Item unity\Builds\eval-windows\demos\*.demo training\demos\
+
+# 3. entrenar — race_ppo.yaml ya trae los bloques behavioral_cloning + gail
+mlagents-learn training\config\race_ppo.yaml `
+  --env=unity\Builds\train-windows\train.exe --num-envs=4 --run-id=race08
+```
+
+`behavioral_cloning.steps` (2M) es cuánto dura el empuje de BC antes de que
+domine el RL. `gail.strength` (0.15) es el peso de la recompensa de imitación
+durante toda la corrida. Los `.demo` son datos (gitignoreados), no fuente.
+
 ## Notas de recompensa (para ajustar entre corridas)
 
 ⚠️ Los campos son `[SerializeField]` en `RaceAgent`, **pero `TrainingArena` arma el

@@ -3,18 +3,18 @@
 # directiva). CPU-only: la GPU no aporta con este setup (CLAUDE.md §2.3).
 #
 #   mlagents-learn training/config/race_ppo.yaml `
-#     --env=unity/Builds/train-windows/train.exe --num-envs=4 --run-id=race07
+#     --env=unity/Builds/train-windows/train.exe --num-envs=4 --run-id=race08
 #
 # El nombre "RaceAgent" tiene que coincidir con BehaviorParameters.BehaviorName
 # (ver TrainingArena.AddBehaviour).
 #
-# race01-06 se estancaron en ~10% de vuelta; la heurística (misma física) hizo
-# el 82%. Es brecha de aprendizaje, no del entorno: el agente no veía venir las
-# curvas y la recompensa premiaba velocidad cruda. race07 (obliga a reentrenar,
-# cambia el espacio de observación): +3 obs de curvatura hacia adelante
-# (VectorObservationSize 12->15), raycasts 40->70 m, y la recompensa de velocidad
-# ahora tiene pico en una velocidad OBJETIVO según la curvatura (frenar en curva
-# paga). Ver docs/Devlog.md.
+# race07 (obs de anticipación + recompensa de velocidad objetivo) subió el reward
+# ~40% y bajó el Value Loss, pero seguía en ~10% de vuelta (offTrack 97%). Es
+# hard-exploration: el agente no descubre la maniobra de curva porque el 97% de
+# los intentos mueren en <2 s. race08 = imitación desde la heurística (que hace
+# 82% de vuelta): BC pre-entrena la política y GAIL le da recompensa de imitación
+# durante el entrenamiento. Requiere training/demos/*.demo — grabar con
+# `eval.exe -record` (ver training/README.md §5). Ver docs/Devlog.md.
 
 behaviors:
   RaceAgent:
@@ -42,6 +42,18 @@ behaviors:
       extrinsic:
         gamma: 0.995
         strength: 1.0
+      gail:
+        gamma: 0.99
+        strength: 0.15
+        demo_path: training/demos
+        use_actions: true
+
+    # Behavioural cloning: pre-train + keep nudging the policy toward the
+    # heuristic demos for the first ~2M steps, then it fades and RL takes over.
+    behavioral_cloning:
+      demo_path: training/demos
+      strength: 0.5
+      steps: 2000000
 
     keep_checkpoints: 20
     checkpoint_interval: 500000

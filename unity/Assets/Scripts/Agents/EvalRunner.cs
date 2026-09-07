@@ -1,7 +1,9 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using AgenticRacing.Vehicle;
 using Unity.InferenceEngine;
+using Unity.MLAgents.Demonstrations;
 using Unity.MLAgents.Policies;
 using UnityEngine;
 
@@ -30,13 +32,21 @@ namespace AgenticRacing.Agents
         private float _startTime;
         private bool _reported;
         private bool _heuristic;
+        private bool _record;
+        private string _demoDir;
 
         private void Start()
         {
             // `eval.exe -heuristic` runs RaceAgent.Heuristic (the scripted
             // racing-line follower) instead of a trained model — the "can this
             // track be driven at all?" reference.
-            _heuristic = System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-heuristic") >= 0;
+            // `eval.exe -record` implies -heuristic and attaches a
+            // DemonstrationRecorder to every agent, writing .demo files next to
+            // the exe for imitation learning (BC/GAIL).
+            var args = System.Environment.GetCommandLineArgs();
+            _record = System.Array.IndexOf(args, "-record") >= 0;
+            _heuristic = _record || System.Array.IndexOf(args, "-heuristic") >= 0;
+            if (_record && evalSeconds < 300f) evalSeconds = 300f;
 
             ModelAsset model = null;
             if (!_heuristic)
@@ -50,6 +60,9 @@ namespace AgenticRacing.Agents
                 }
             }
 
+            _demoDir = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "demos"));
+            if (_record) Directory.CreateDirectory(_demoDir);
+
             var arenas = FindObjectsByType<TrainingArena>(FindObjectsSortMode.None);
             _trackLen = arenas.Length > 0 && arenas[0].Track != null ? arenas[0].Track.Length : 0f;
 
@@ -59,6 +72,13 @@ namespace AgenticRacing.Agents
                 if (_heuristic)
                 {
                     agent.GetComponent<BehaviorParameters>().BehaviorType = BehaviorType.HeuristicOnly;
+                    if (_record)
+                    {
+                        var rec = agent.gameObject.AddComponent<DemonstrationRecorder>();
+                        rec.DemonstrationName = "RaceHeuristic";
+                        rec.DemonstrationDirectory = _demoDir;
+                        rec.Record = true;
+                    }
                 }
                 else
                 {
@@ -76,8 +96,8 @@ namespace AgenticRacing.Agents
 
             RaceAgent.AnyEpisodeEnded += OnEpisodeEnded;
             _startTime = Time.time;
-            Debug.Log($"[Eval] {(_heuristic ? "policy=HEURISTIC" : "model=Resources/" + modelResource)} " +
-                      $"agents={n} cars={_cars.Count} trackLen={_trackLen:F0}m window={evalSeconds:F0}s");
+            string mode = _record ? $"RECORD -> {_demoDir}" : _heuristic ? "policy=HEURISTIC" : "model=Resources/" + modelResource;
+            Debug.Log($"[Eval] {mode} agents={n} cars={_cars.Count} trackLen={_trackLen:F0}m window={evalSeconds:F0}s");
             if (n == 0)
             {
                 Debug.LogError("[Eval] no RaceAgent found in the scene");
@@ -118,6 +138,15 @@ namespace AgenticRacing.Agents
         private void Report()
         {
             _reported = true;
+
+            if (_record)
+            {
+                // Flush every recorder so the .demo files close cleanly.
+                foreach (var rec in FindObjectsByType<DemonstrationRecorder>(FindObjectsSortMode.None))
+                    rec.Close();
+                var files = Directory.Exists(_demoDir) ? Directory.GetFiles(_demoDir, "*.demo") : new string[0];
+                Debug.Log($"[Eval] RECORD done: {files.Length} .demo files in {_demoDir}");
+            }
 
             long s = System.Math.Max(1, _samples);
             int e = System.Math.Max(1, _epCount);
