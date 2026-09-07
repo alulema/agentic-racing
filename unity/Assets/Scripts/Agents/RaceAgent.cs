@@ -317,9 +317,15 @@ namespace AgenticRacing.Agents
         private static readonly System.Collections.Generic.Queue<string> _endRecent = new();
         private static int _endTotal;
         private static float _lapArcSum;
+
+        /// <summary>Fired on every episode end: (reason, steps, lapArc metres).
+        /// Used by the offline eval harness (<see cref="EvalRunner"/>).</summary>
+        internal static event System.Action<string, int, float> AnyEpisodeEnded;
+
         private void EndDiag(string reason, float value)
         {
             _diagCounted = true;
+            AnyEpisodeEnded?.Invoke(reason, _episodeSteps, _lapArc);
             _endTotal++;
             _lapArcSum += _lapArc;
             _endRecent.Enqueue(reason);

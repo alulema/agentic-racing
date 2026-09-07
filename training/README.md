@@ -140,6 +140,27 @@ Curvas a mirar: `Environment/Cumulative Reward` (debe subir y aplanarse),
 El agente lo mete en `models/` versionado junto a este YAML y el commit
 (§10), analiza las curvas y ajusta recompensas para la siguiente corrida.
 
+## 5. Ver qué hace una política entrenada (eval offline, sin Editor)
+
+`Fase2EvalBuild` arma un player que corre la grilla de arenas en `InferenceOnly`
+con un `.onnx` horneado durante 120 s y loguea un reporte agregado (split de por
+qué terminan los episodios, % de vuelta recorrido, velocidad/throttle/steer
+medios). Sirve para diagnosticar sin abrir el Editor.
+
+```powershell
+# 1. buildear el eval player con el modelo elegido
+"<Unity>\Editor\Unity.exe" -batchmode -quit -projectPath unity `
+  -executeMethod AgenticRacing.EditorTools.Fase2EvalBuild.Build `
+  -logFile eval-build.log -evalModel results\race04\RaceAgent.onnx
+
+# 2. correrlo y leer la línea [Eval] REPORT
+unity\Builds\eval-windows\eval.exe -logFile eval.log
+```
+
+Sin `-evalModel` usa `AGENTIC_EVAL_MODEL` o, por defecto,
+`results/race04/RaceAgent.onnx`. Para comparar dos modelos, repetir con otro
+`-evalModel` (cada build hornea uno).
+
 ## Notas de recompensa (para ajustar entre corridas)
 
 ⚠️ Los campos son `[SerializeField]` en `RaceAgent`, **pero `TrainingArena` arma el

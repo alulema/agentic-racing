@@ -51,6 +51,13 @@ sysinfo.txt
 /unity/Assets/Resources/PerformanceTestRun*.json
 /unity/Assets/Resources/PerformanceTestRun*.json.meta
 
+# Offline eval harness: model baked in by Fase2EvalBuild + its generated scene
+/unity/Assets/Resources/Eval/
+/unity/Assets/Resources/Eval.meta
+/unity/Assets/Scenes/EvalArena.unity
+/unity/Assets/Scenes/EvalArena.unity.meta
+/unity/Builds/
+
 # ---- Python (server, training scripts) ----
 __pycache__/
 *.pyc

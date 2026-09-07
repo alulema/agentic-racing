@@ -4,7 +4,8 @@
     "references": [
         "AgenticRacing.Track",
         "AgenticRacing.Vehicle",
-        "Unity.ML-Agents"
+        "Unity.ML-Agents",
+        "Unity.InferenceEngine"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

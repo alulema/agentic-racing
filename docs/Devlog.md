@@ -1445,3 +1445,43 @@ apunta en la dirección correcta y no había convergido.
 **Siguiente**: rebuild → `--run-id=race04 --num-envs=4` (~1.8 h). Mirar si el reward sigue
 subiendo más allá de ~10 y si el % de `lap` en la ventana móvil crece. Si se aplana,
 comparar con ver un checkpoint en el Editor.
+
+### race04 regresó — race03 fue varianza, no breakthrough + harness de eval offline (2026-09-06)
+
+`race04` (10M steps, iter 4). **Volvió al pozo de race01/race02**:
+
+| | race01 | race02 | race03 | race04 |
+|---|---|---|---|---|
+| steps | 20M | 4M | 4M | 10M |
+| Cumulative Reward (plateau) | ~3.4 | ~4.0 | ~10 ↑ | ~4.8 |
+| Episode Length final | 143 ↓ | 149 ↓ | 759 ↑ | 155 ↓ |
+| `stuck` al final del run | — | — | bajando | **96%** |
+
+El tally de ventana móvil de race04 da **`stuck` 96–97% constante** durante los 10M steps,
+`lap` 3–4%, `mean lapArc` clavado en ~245 m (10% de vuelta). race03 (que había roto el
+plateau) fue **varianza favorable de una corrida**, no un cambio real — con más entrenamiento
+race04 volvió al mismo óptimo local.
+
+**El exploit, con números**: episodio típico de race04 → progreso `245 m × 0.02 = 4.9`,
+menos `timePenalty` (~0.08), menos `stuckPenalty` (−1) ≈ **+3.8** = el plateau exacto. El
+agente aprendió la política óptima *dado este reward*: usar el rolling start, rodar ~245 m,
+**parar y cobrar el −1 de `stuck`, que además termina el episodio rápido**. Empujar más
+arriesga `offTrack` o el castigo de tiempo hasta `MaxStep`. Morir rápido es el mejor retorno.
+El `stuck` que *termina* el episodio es una vía de escape.
+
+**Harness de eval offline** (para ver qué hace la política sin abrir el Editor, que es el
+lado flaco del dueño del proyecto):
+- `EvalRunner.cs` — corre la grilla de arenas en `BehaviorType.InferenceOnly` con un `.onnx`
+  baked (`Resources/Eval/RaceAgent`), 120 s, y loguea un reporte agregado: nº de episodios,
+  pasos medios, % de progreso de vuelta, split de fines, y velocidad/throttle/steer medios.
+  Se apoya en el evento `RaceAgent.AnyEpisodeEnded`.
+- `Fase2EvalBuild.cs` — copia el `.onnx` (de `-evalModel <path>`, o `AGENTIC_EVAL_MODEL`, o
+  `results/race04/RaceAgent.onnx`) a `Assets/Resources/Eval/`, arma la escena `EvalArena`
+  con `EvalRunner`, y buildea `Builds/eval-windows/eval.exe` (Windows/Mono).
+- `AgenticRacing.Agents.asmdef` ahora referencia `Unity.InferenceEngine` (para `ModelAsset`).
+- `.gitignore`: `Assets/Resources/Eval/`, `EvalArena.unity`, `unity/Builds/`.
+
+**Siguiente**: evaluar race03 y race04 con el harness para confirmar el patrón "lanza y
+para", y después reestructurar el reward — `stuck` deja de terminar el episodio (pasa a
+penalización por segundo, terminación solo como red de seguridad a los ~8 s) y bajar
+`timePenaltyPerStep`.
