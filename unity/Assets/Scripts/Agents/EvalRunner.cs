@@ -60,6 +60,10 @@ namespace AgenticRacing.Agents
                 }
             }
 
+            // Clean, aligned, at-speed spawns for the heuristic — the noisy
+            // training spawn stalls it before it can converge to the line.
+            RaceAgent.CleanSpawn = _heuristic;
+
             _demoDir = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "demos"));
             if (_record) Directory.CreateDirectory(_demoDir);
 

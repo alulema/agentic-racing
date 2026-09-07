@@ -135,23 +135,32 @@ namespace AgenticRacing.Agents
             _directive = RaceDirective.RandomEpisode(_rng);
 
             var center = _track.Centerline;
+            var lineForSpawn = _track.RacingLine;
             int n = center.Count;
             int i = _rng.Next(n);
             Vector3 trackDir = (center[(i + 1) % n] - center[i]);
             trackDir.y = 0f;
             trackDir.Normalize();
-            Vector3 fwd = Quaternion.Euler(0f, (float)(_rng.NextDouble() * 2 - 1) * spawnHeadingNoiseDeg, 0f) * trackDir;
+
+            // CleanSpawn (set by the eval harness for demo recording): on the
+            // racing line, aligned, at speed — no heading/lateral noise. The noisy
+            // spawn is training-time episode diversity; for clean demo laps we
+            // want the controller to start from a fair pose.
+            float headNoise = CleanSpawn ? 0f : spawnHeadingNoiseDeg;
+            float latNoise = CleanSpawn ? 0f : spawnLateralNoise;
+            Vector3 fwd = Quaternion.Euler(0f, (float)(_rng.NextDouble() * 2 - 1) * headNoise, 0f) * trackDir;
 
             Vector3 side = new Vector3(-fwd.z, 0f, fwd.x);
-            Vector3 spawn = center[i] + Vector3.up * 0.4f
-                            + side * (float)((_rng.NextDouble() * 2 - 1) * spawnLateralNoise);
+            Vector3 basePos = CleanSpawn ? lineForSpawn[i] : center[i];
+            Vector3 spawn = basePos + Vector3.up * 0.4f
+                            + side * (float)((_rng.NextDouble() * 2 - 1) * latNoise);
 
             _car.PlaceAt(spawn, fwd);
             _car.Throttle = _car.Brake = _car.Steer = 0f;
             // Rolling start along the track. race01/race02 spawned at a dead stop
             // every episode and most episodes ended in ~3 s via the stuck check
             // before the car ever launched, so lap reward never got any credit.
-            _rb.linearVelocity = trackDir * launchSpeed;
+            _rb.linearVelocity = trackDir * (CleanSpawn ? 14f : launchSpeed);
 
             _progress.Reset(_rb.position);
             _lapArc = 0f;
@@ -417,6 +426,10 @@ namespace AgenticRacing.Agents
         /// <summary>Fired on every episode end: (reason, steps, lapArc metres).
         /// Used by the offline eval harness (<see cref="EvalRunner"/>).</summary>
         internal static event System.Action<string, int, float> AnyEpisodeEnded;
+
+        /// <summary>Set by the eval harness for demo recording: spawn on the racing
+        /// line, aligned, at speed — no training-time heading/lateral noise.</summary>
+        internal static bool CleanSpawn;
 
         private void EndDiag(string reason, float value)
         {
