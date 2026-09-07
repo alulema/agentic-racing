@@ -1810,3 +1810,27 @@ Dos causas, no una:
 **Siguiente**: rebuild eval → `eval.exe -heuristic`. Si `meanLapProgress` da un salto
 cualitativo → los dos bugs eran esto, y pivoteamos a reentrenar limpio (race08 sin BC/GAIL,
 con la config de recompensa actual) para ver si pasa Fase 2.
+
+### CAUSA RAÍZ (de verdad esta vez): el grip lateral frena en seco al doblar (2026-09-07)
+
+Malla / cajas / sólido extruido para los muros: los tres dan `meanLapProgress` ~11-12% con
+la MISMA firma de muerte (`spd=0` fijo 3 s, `steer` chico constante, `lat` derivando de
+lado, sin curva, mitad de pista). **Los muros no eran la causa.**
+
+El auto termina en una **pirueta lenta** (círculo de ~1 m a ~0.4 m/s). Cómo entra:
+`ApplyLateralGrip` **borra** la velocidad lateral, `Δv = -vRight × LateralGrip × dt =
+-vRight × 0.18` por step. Al doblar fuerte a 13 m/s, la velocidad queda "de costado"
+respecto a la trompa nueva → `vRight` ~5 → grip = **−45 m/s²** → el auto **frena de 13 a
+2 m/s en una fracción de segundo** → lento + girando → pirueta → stall.
+
+Consecuencia: cualquier giro agresivo a velocidad = frenazo. El RL y la heurística
+**aprenden a no doblar fuerte** = nunca tomar curvas = ~10% de vuelta. Esto explica los
+race01-07 y todas las iteraciones de heurística de esta sesión.
+
+**Fix** (`CarController` / `VehicleConfig`): cap del grip lateral a `MaxGripAccel = 16 m/s²`
+— con slip chico el grip funciona igual (el auto va "sobre rieles"), con slip grande
+(doblada agresiva) el auto **desliza ancho** (pierde la línea) en vez de frenar en seco, y
+el controlador tiene tiempo de recuperar. `LateralGrip` 9 → 7.
+
+**Siguiente**: rebuild eval → `eval.exe -heuristic`. Espero por fin un salto: la heurística
+debería dar vueltas (dobla, desliza un poco, sigue). Si es así → reentrenar limpio.

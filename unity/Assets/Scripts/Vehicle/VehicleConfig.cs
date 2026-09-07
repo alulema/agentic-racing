@@ -47,7 +47,12 @@ namespace AgenticRacing.Vehicle
 
         [Header("Grip")]
         [Tooltip("Lateral grip as an acceleration multiplier; higher = less sliding.")]
-        public float LateralGrip = 9f;
+        public float LateralGrip = 7f;
+        [Tooltip("Hard cap on the lateral-grip deceleration (m/s^2). Without it a " +
+                 "hard steer at speed makes grip scrub off almost all the car's " +
+                 "velocity in one step -> the car pirouettes to a stop instead of " +
+                 "cornering, and RL/heuristic learn to never turn (Devlog 2026-09-07).")]
+        public float MaxGripAccel = 16f;
         [Tooltip("Extra downward force (N) to keep the car planted over crests.")]
         public float Downforce = 2000f;
 

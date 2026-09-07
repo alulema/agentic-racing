@@ -157,8 +157,11 @@ namespace AgenticRacing.Vehicle
             Vector3 right = transform.right;
             float vRight = Vector3.Dot(_rb.linearVelocity, right);
             // Cancel most of the sideways velocity each step; what leaks through
-            // is the slide/drift.
-            _rb.AddForce(-right * (vRight * config.LateralGrip), ForceMode.Acceleration);
+            // is the slide/drift. Capped so a hard steer at speed makes the car
+            // slide wide, not brake to a pirouette (Devlog 2026-09-07).
+            float grip = Mathf.Clamp(-vRight * config.LateralGrip,
+                                     -config.MaxGripAccel, config.MaxGripAccel);
+            _rb.AddForce(right * grip, ForceMode.Acceleration);
         }
 
         /// <summary>Places the car at a pose and clears its motion (grid reset).</summary>
