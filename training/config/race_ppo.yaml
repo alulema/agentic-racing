@@ -3,15 +3,16 @@
 # directiva). CPU-only: la GPU no aporta con este setup (CLAUDE.md §2.3).
 #
 #   mlagents-learn training/config/race_ppo.yaml `
-#     --env=unity/Builds/train-windows/train.exe --num-envs=4 --run-id=race04
+#     --env=unity/Builds/train-windows/train.exe --num-envs=4 --run-id=race05
 #
 # El nombre "RaceAgent" tiene que coincidir con BehaviorParameters.BehaviorName
 # (ver TrainingArena.AddBehaviour).
 #
-# race01/race02: se aplanaban a ~1.25M steps con reward ~4. race03 (iter 3:
-# rolling start + stuck armado + shaping útil, ver docs/Devlog.md) rompió el
-# plateau: episodios 150→750 steps y reward −2 → ~10 SIN aplanarse a 4M. iter 4:
-# subir max_steps a 10M para dejar que consolide (seguía subiendo).
+# race01-04: la política nunca aprendió a frenar (eval: meanBrake ~0.02); o
+# reptaba a ~7 m/s (race03) o salía disparada y se estrellaba/paraba en ~200 m
+# (race04) — ambas ~9% de vuelta. iter 5 (RaceAgent.cs): 'stuck' pasa a
+# penalización por segundo (ya no termina el episodio como vía de escape) y el
+# time-penalty plano se reemplaza por una penalización por ir lento. Ver Devlog.
 
 behaviors:
   RaceAgent:
@@ -42,7 +43,7 @@ behaviors:
 
     keep_checkpoints: 20
     checkpoint_interval: 500000
-    max_steps: 10000000
+    max_steps: 6000000
     time_horizon: 1000
     summary_freq: 50000
     threaded: false

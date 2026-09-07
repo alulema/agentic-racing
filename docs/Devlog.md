@@ -1485,3 +1485,48 @@ lado flaco del dueño del proyecto):
 para", y después reestructurar el reward — `stuck` deja de terminar el episodio (pasa a
 penalización por segundo, terminación solo como red de seguridad a los ~8 s) y bajar
 `timePenaltyPerStep`.
+
+### Eval de race03 vs race04 — la política no frena; reestructura de reward iter 5 (2026-09-06)
+
+`eval.exe` (120 s, InferenceOnly) sobre los dos modelos:
+
+| | race03 | race04 |
+|---|---|---|
+| meanForwardSpeed | 6.7 m/s | 15.8 m/s |
+| meanThrottle | 0.18 | 0.64 |
+| **meanBrake** | **0.02** | **0.02** |
+| meanAbsSteer | 0.43 | 0.36 |
+| meanEpisodeSteps | 1768 (~35 s) | 673 (~13 s) |
+| meanLapProgress | 8% | 9% |
+| fin dominante | maxStep 76%* | stuck 86% |
+
+\* el bucket `maxStep` de race03 está inflado por ~9 resets espurios del harness al
+cargar el modelo — corregido para el próximo eval (`OnEpisodeBegin` ahora solo cuenta
+`maxStep` si `_episodeSteps >= MaxStep-5`).
+
+**Hallazgo central**: `meanBrake ≈ 0.02` en **ambos** — la política **nunca frena**. Sin
+frenar no se puede tomar una curva a velocidad en esta física, así que solo le quedan dos
+opciones y aprendió una u otra según la corrida: reptar a ~7 m/s para poder doblar sin
+frenar (race03) o acelerar a fondo y salirse / pararse (race04). Las dos cubren ~9% de la
+vuelta: **se atascan en la primera curva de verdad** (~245 m ≈ donde está esa curva).
+
+**Reestructura de reward (iter 5, `RaceAgent.cs`)** — quitar las dos formas de "ganar" sin
+manejar bien:
+- **`stuck` ya no termina el episodio**. Era la vía de escape (reptar un poco, parar,
+  cobrar el −1 y resetear). Ahora es `stuckPenaltyPerSec = 0.3` mientras está parado, con
+  corte duro solo a los 8 s (auto genuinamente muerto).
+- **El time-penalty plano (`0.0005`/step) se reemplaza por una penalización por ir lento**:
+  `slowPenaltyPerSec = 0.25`, rampa desde 0 en `targetSpeedFrac = 0.30` de `MaxSpeed`
+  (~16 m/s) hasta el máximo cerca de la parada. El plano castigaba por igual episodios
+  largos → premiaba morir rápido. Economía nueva: reptar a ≤7 m/s queda ≈0 o negativo,
+  manejar a 12+ paga, a 16+ sin penalización.
+- `speedRewardPerSec` 0.15 → 0.30.
+- `stuckSeconds` 3 → 8 (solo red de seguridad).
+
+`race_ppo.yaml`: `max_steps` 10M → 6M (el reward cambió, es un problema nuevo; extender si
+promete). run-id race05.
+
+**Siguiente**: rebuild `train.exe` → `--run-id=race05 --num-envs=4` (~1 h). Mirar en el
+`Player-0.log` el split de `end reasons` (ahora `stuck` no debería dominar) y `mean lapArc`.
+Después evaluar el `.onnx` con el harness: lo que quiero ver es `meanBrake` > 0 y
+`meanLapProgress` subiendo por encima del 9%.

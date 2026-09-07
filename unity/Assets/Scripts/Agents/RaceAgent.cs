@@ -27,22 +27,28 @@ namespace AgenticRacing.Agents
         // NOTE: TrainingArena builds the agent in code with no field overrides, so
         // these run with the values below, not with anything serialized. Tuning =
         // edit here + rebuild the training player (docs/Devlog.md 2026-09-06).
+        // race01-04: policy would not learn to brake (meanBrake ~0.02 in eval) so
+        // it either crept at ~7 m/s to survive (race03) or blasted off-track /
+        // stalled within ~200 m (race04) — both ~9% of a lap. This pass removes
+        // the two ways to "win" without driving well: creeping is now penalised
+        // (slowPenalty), and 'stuck' no longer ends the episode as an escape.
         [Header("Reward shaping")]
         [SerializeField] private float progressRewardPerMetre = 0.02f;
-        [SerializeField] private float speedRewardPerSec = 0.15f;     // scaled by forward-speed fraction
+        [SerializeField] private float speedRewardPerSec = 0.30f;     // scaled by forward-speed fraction
         [SerializeField] private float lineFollowRewardPerSec = 0.10f; // when moving, aligned, and near the racing line
-        [SerializeField] private float timePenaltyPerStep = 0.0005f;
+        [SerializeField] private float slowPenaltyPerSec = 0.25f;     // ramps in below targetSpeedFrac of max speed
+        [SerializeField] private float targetSpeedFrac = 0.30f;       // no slow penalty at/above this fraction of MaxSpeed
         [SerializeField] private float edgeCreepPenaltyPerSec = 0.5f;
         [SerializeField] private float offTrackPenalty = 1.0f;
         [SerializeField] private float wallHitPenalty = 0.1f;
-        [SerializeField] private float stuckPenalty = 1.0f;
+        [SerializeField] private float stuckPenaltyPerSec = 0.3f;     // while stopped (does NOT end the episode)
         [SerializeField] private float lapBonus = 12.0f;
         [SerializeField] private float fastLapBonus = 8.0f;           // extra, scaled by the MaxStep budget left at lap completion
 
         [Header("Episode limits")]
         [SerializeField] private float offTrackMargin = 2.0f;   // metres past the edge = fully off
         [SerializeField] private float stuckSpeed = 0.5f;       // m/s
-        [SerializeField] private float stuckSeconds = 3.0f;
+        [SerializeField] private float stuckSeconds = 8.0f;     // hard cutoff only — a genuinely dead car, not a tactic
         [SerializeField] private float wrongWaySeconds = 2.5f;
         [SerializeField] private float spawnHeadingNoiseDeg = 10f;
         [SerializeField] private float spawnLateralNoise = 2.0f;
@@ -103,10 +109,12 @@ namespace AgenticRacing.Agents
             if (ep <= 15 || ep % 200 == 0)
                 Debug.Log($"[RaceAgent] OnEpisodeBegin #{ep}: track={_track != null} " +
                           $"stepCount={StepCount} prevEpisodeSteps={_episodeSteps}");
-            // If the previous episode ended without hitting one of our explicit
-            // EndEpisode() paths, it timed out on MaxStep — count it so the tally
-            // reflects the real split.
-            if (ep > 1 && !_diagCounted && _track != null) EndDiag("maxStep", _episodeSteps);
+            // If the previous episode ended without one of our explicit
+            // EndEpisode() paths AND ran ~the full budget, it timed out on
+            // MaxStep — count it. (Guard on step count so a mid-episode policy
+            // swap in the eval harness isn't miscounted as a timeout.)
+            if (ep > 1 && !_diagCounted && _track != null && _episodeSteps >= MaxStep - 5)
+                EndDiag("maxStep", _episodeSteps);
             _diagCounted = false;
             _episodeSteps = 0;
 
@@ -235,7 +243,6 @@ namespace AgenticRacing.Agents
             float fwdMetres = _progress.ConsumeForwardDelta();
 
             AddReward(fwdMetres * progressRewardPerMetre);
-            AddReward(-timePenaltyPerStep);
 
             // Speed and racing-line shaping. Both scale with the forward-speed
             // fraction so they cannot be farmed at a standstill (that was the
@@ -243,6 +250,12 @@ namespace AgenticRacing.Agents
             float maxSpeed = Mathf.Max(1f, _car.Config.MaxSpeed);
             float fwdFrac = Mathf.Clamp01(_car.ForwardSpeed / maxSpeed);
             AddReward(speedRewardPerSec * fwdFrac * Time.fixedDeltaTime);
+
+            // Penalise crawling: ramps from 0 at targetSpeedFrac of MaxSpeed to
+            // full below a near-stop. Replaces the old flat per-step time penalty,
+            // which punished long episodes equally and so rewarded dying fast.
+            float slow = 1f - Mathf.Clamp01(fwdFrac / Mathf.Max(0.01f, targetSpeedFrac));
+            AddReward(-slowPenaltyPerSec * slow * Time.fixedDeltaTime);
 
             if (fwdFrac > 0.05f)
             {
@@ -273,15 +286,19 @@ namespace AgenticRacing.Agents
                 return;
             }
 
-            // Only let the stuck check bite after the car has genuinely got going
-            // at least once — a fumbled launch shouldn't end the episode, a
-            // mid-track stall should.
+            // Stuck is a per-second penalty, NOT an episode end — ending on stuck
+            // was an escape hatch (race01-04: creep a bit, then stop to cash the
+            // one-off penalty and reset). It only arms once the car has genuinely
+            // moved, and only hard-terminates after a long stall (a dead car, not
+            // a tactic).
             if (_car.ForwardSpeed > stuckSpeed) _stuckArmed = true;
             if (_stuckArmed && Mathf.Abs(_car.ForwardSpeed) < stuckSpeed) _stuckTimer += Time.fixedDeltaTime;
             else _stuckTimer = 0f;
+            if (_stuckArmed && _stuckTimer > 0f)
+                AddReward(-stuckPenaltyPerSec * Time.fixedDeltaTime);
             if (_stuckTimer > stuckSeconds)
             {
-                AddReward(-stuckPenalty);
+                AddReward(-offTrackPenalty);
                 EndDiag("stuck", _stuckTimer);
                 EndEpisode();
                 return;
