@@ -35,10 +35,11 @@ namespace AgenticRacing.Agents
         [Header("Reward shaping")]
         [SerializeField] private float progressRewardPerMetre = 0.02f;
         [SerializeField] private float speedRewardPerSec = 0.30f;     // scaled by forward-speed fraction
-        [SerializeField] private float lineFollowRewardPerSec = 0.10f; // when moving, aligned, and near the racing line
+        [SerializeField] private float lineFollowRewardPerSec = 0.05f; // when moving, aligned, and near the racing line
         [SerializeField] private float slowPenaltyPerSec = 0.25f;     // ramps in below targetSpeedFrac of max speed
         [SerializeField] private float targetSpeedFrac = 0.30f;       // no slow penalty at/above this fraction of MaxSpeed
-        [SerializeField] private float edgeCreepPenaltyPerSec = 0.5f;
+        [SerializeField] private float edgeCreepPenaltyPerSec = 0.6f;
+        [SerializeField] private float edgeSafeFrac = 0.55f;          // edge penalty ramps in past this fraction of the half-width
         [SerializeField] private float offTrackPenalty = 1.0f;
         [SerializeField] private float wallHitPenalty = 0.1f;
         [SerializeField] private float stuckPenaltyPerSec = 0.3f;     // while stopped (does NOT end the episode)
@@ -49,7 +50,7 @@ namespace AgenticRacing.Agents
         [SerializeField] private float offTrackMargin = 2.0f;   // metres past the edge = fully off
         [SerializeField] private float stuckSpeed = 0.5f;       // m/s
         [SerializeField] private float stuckSeconds = 8.0f;     // hard cutoff only — a genuinely dead car, not a tactic
-        [SerializeField] private float wrongWaySeconds = 2.5f;
+        [SerializeField] private float wrongWaySeconds = 4.5f;
         [SerializeField] private float spawnHeadingNoiseDeg = 10f;
         [SerializeField] private float spawnLateralNoise = 2.0f;
         [SerializeField] private float launchSpeed = 8.0f;      // m/s along the track at spawn — no dead-stop starts
@@ -275,9 +276,15 @@ namespace AgenticRacing.Agents
                 AddReward(lineFollowRewardPerSec * follow * fwdFrac * Time.fixedDeltaTime);
             }
 
+            // Edge avoidance: smooth penalty that ramps in from edgeSafeFrac of the
+            // half-width out to the edge, then the old hard penalty past it. The
+            // racing line hugs the walls, so rewarding line-following alone pushed
+            // the car into them (Devlog 2026-09-07) — this pulls it back toward a
+            // safe corridor.
             float absLat = Mathf.Abs(_progress.LateralOffset);
-            if (absLat > _halfWidth)
-                AddReward(-edgeCreepPenaltyPerSec * Time.fixedDeltaTime);
+            float edgeT = Mathf.InverseLerp(edgeSafeFrac * _halfWidth, _halfWidth, absLat);
+            if (edgeT > 0f)
+                AddReward(-edgeCreepPenaltyPerSec * edgeT * Time.fixedDeltaTime);
             if (absLat > _halfWidth + offTrackMargin)
             {
                 AddReward(-offTrackPenalty);
@@ -304,7 +311,9 @@ namespace AgenticRacing.Agents
                 return;
             }
 
-            if (fwdMetres < -0.15f) _wrongWayTimer += Time.fixedDeltaTime;
+            // Wrong-way only arms after the car has actually made progress — a
+            // short reverse to unstick from a wall must not end the episode.
+            if (_lapArc > 15f && fwdMetres < -0.15f) _wrongWayTimer += Time.fixedDeltaTime;
             else _wrongWayTimer = 0f;
             if (_wrongWayTimer > wrongWaySeconds)
             {
@@ -373,13 +382,13 @@ namespace AgenticRacing.Agents
         }
 
         /// <summary>
-        /// Autonomous racing-line follower: pure-pursuit steering toward a
-        /// speed-scaled lookahead point on <see cref="TrackData.RacingLine"/>,
-        /// plus brake-into / accelerate-out speed control from the heading change
-        /// of the line just ahead. Not used in training; it is the reference
-        /// "can this track even be driven?" controller, run via the eval harness
-        /// (EvalRunner with <c>-heuristic</c>), and the seed of the Fase 6.3 fixed
-        /// heuristic strategy.
+        /// Autonomous path follower: pure-pursuit steering toward a speed-scaled
+        /// lookahead point on a centre-biased blend of centreline and racing line
+        /// (the pure racing line hugs the walls — too little error margin), plus
+        /// brake-into / accelerate-out speed control from the sharpest heading
+        /// change of the line ahead, and a reverse-off-the-wall recovery. Not used
+        /// in training; it is the "can this track be driven?" reference (eval
+        /// harness <c>-heuristic</c>) and the seed of the Fase 6.3 fixed strategy.
         /// </summary>
         public override void Heuristic(in ActionBuffers actionsOut)
         {
@@ -387,24 +396,35 @@ namespace AgenticRacing.Agents
             if (_track == null) { a[0] = a[1] = a[2] = 0f; return; }
 
             var line = _track.RacingLine;
+            var center = _track.Centerline;
             int n = line.Count;
             int s = _progress.NearestSample;
             float spacing = Mathf.Max(0.1f, _track.Length / n);
             float speed = Mathf.Max(0f, _car.ForwardSpeed);
             float maxSpeed = Mathf.Max(1f, _car.Config.MaxSpeed);
 
-            // Steering = pure-pursuit toward a speed-scaled lookahead point on the
-            // racing line, plus a cross-track term that pulls the car back onto
-            // the line when it has drifted off.
+            Vector3 left = new Vector3(-_progress.Tangent.z, 0f, _progress.Tangent.x);
+            float carOffLeft = Vector3.Dot(_rb.position - center[s], left); // + = car left of centre
+
+            // Reverse-off-the-wall: slow and jammed against an edge -> back straight
+            // out, then normal control resumes once it is moving again.
+            if (speed < 2f && Mathf.Abs(carOffLeft) > 0.65f * _halfWidth)
+            {
+                a[0] = Mathf.Sign(carOffLeft) * 0.4f;
+                a[1] = -1f;
+                a[2] = 0f;
+                return;
+            }
+
+            // Pure-pursuit toward a centre-biased lookahead point.
             float lookaheadM = Mathf.Clamp(10f + speed * 1.2f, 12f, 55f);
             int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
-            Vector3 toTarget = line[(s + laSteps) % n] - _rb.position;
+            Vector3 aim = Vector3.Lerp(line[(s + laSteps) % n], center[(s + laSteps) % n], 0.5f);
+            Vector3 toTarget = aim - _rb.position;
             toTarget.y = 0f;
             float headingErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
 
-            Vector3 left = new Vector3(-_progress.Tangent.z, 0f, _progress.Tangent.x);
-            float crossTrackM = Vector3.Dot(_rb.position - line[s], left); // + = car is left of the line
-            float crossCorrDeg = Mathf.Clamp(crossTrackM * 4f, -30f, 30f);  // left of line -> steer right (+)
+            float crossCorrDeg = Mathf.Clamp(carOffLeft * 3f, -25f, 25f);  // left of centre -> steer right (+)
 
             a[0] = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 14f, -1f, 1f);
 

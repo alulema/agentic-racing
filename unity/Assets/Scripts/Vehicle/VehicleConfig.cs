@@ -38,8 +38,12 @@ namespace AgenticRacing.Vehicle
         public float TurnRateDegPerSec = 130f;
         [Tooltip("Fraction of TurnRate still available at MaxSpeed (0..1).")]
         public float HighSpeedTurnFactor = 0.35f;
-        [Tooltip("Below this speed (m/s) the car barely steers (prevents spinning in place).")]
-        public float SteerFadeInSpeed = 1.5f;
+        [Tooltip("Steering authority ramps in up to this speed (m/s). Kept low so a " +
+                 "car pinned against a wall can still turn its nose away and drive off " +
+                 "— at 1.5 it was completely helpless once stopped (Devlog 2026-09-07).")]
+        public float SteerFadeInSpeed = 0.4f;
+        [Tooltip("Minimum fraction of steering authority even below SteerFadeInSpeed.")]
+        [Range(0f, 1f)] public float MinSteerAuthority = 0.25f;
 
         [Header("Grip")]
         [Tooltip("Lateral grip as an acceleration multiplier; higher = less sliding.")]

@@ -1568,3 +1568,35 @@ Comparar `meanLapProgress` y `meanBrake`. Si la heurística da vueltas y el mode
 problema de RL (subir exploración, quitar/suavizar `slowPenalty`, reward de trazada más
 fuerte). Si la heurística tampoco → revisar `CarController` (grip lateral, `HighSpeedTurnFactor`)
 y la validación de curvatura de Fase 1.
+
+### Eval -heuristic v2: muere en cualquier lado, siempre pegado a un muro (2026-09-07)
+
+Los 24 `end #N` del segundo `-heuristic`: **todos `stuck`, `speed=0.0`**, `lap%` disperso
+(8, 17, 27, 31, 44, 45, 55, 62, 72, 85, 89, 95...) y `lapArc` de 0 a 471 m. Varios en
+`lapArc≈0` con `steps≈400` = spawneó, se frenó casi al instante, y quedó 8 s clavado. El
+`lateral` al morir: muchos en 4–7 m de 6 → **contra el muro o pasado el borde**.
+
+**Diagnóstico**: no hay una curva asesina; el patrón es que el control (heurística *y* RL)
+tarde o temprano roza un muro, y **cualquier contacto que le baje la velocidad es
+terminal**: con `SteerFadeInSpeed = 1.5`, por debajo de 1.5 m/s el `authority` de dirección
+es **0** — un auto pegado al muro no puede girar la trompa para salir, y encima acelera
+contra él. Además la línea ideal (`BuildRacingLine`) **pega a los bordes** (swing de
++maxOffset a −maxOffset por curva, con `maxOffset ≈ halfWidth − margin`), así que premiar
+"seguir la línea" empujaba el auto a los muros. Y `wrongWay` (2.5 s en reversa → fin de
+episodio) prohíbe la única maniobra de escape que usaría un humano.
+
+**Cambios (física + recompensa + heurística):**
+- `VehicleConfig.SteerFadeInSpeed` 1.5 → **0.4**, nuevo `MinSteerAuthority = 0.25` — hay
+  algo de dirección aún parado, un auto clavado puede zafar. `CarController.ApplySteering`
+  usa `Lerp(MinSteerAuthority, 1, speed/SteerFadeInSpeed)`.
+- `RaceAgent`: penalización de borde **suave**, rampa desde `edgeSafeFrac = 0.55` del
+  half-width hacia afuera (antes: nada hasta el borde, después salto). `lineFollowReward`
+  0.10 → 0.05 (deja de empujar a los muros). `wrongWay` 2.5 → 4.5 s y **solo arma tras
+  15 m de progreso** (una reversa corta para despegarse no mata).
+- `Heuristic`: apunta a un blend 50/50 centerline+racing-line (no a la línea que pega al
+  muro) y **reversa de escape** cuando está lento y contra un borde.
+
+**Siguiente**: rebuild eval → `eval.exe -heuristic`. Si ahora la heurística da vueltas →
+la física era el bloqueo y toca reentrenar con estos cambios (nuevo run-id). Si sigue
+muriendo → mirar `TrackAnalysis` (curvatura máxima que valida Fase 1 / si el generador
+hace curvas imposibles).

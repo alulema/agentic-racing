@@ -136,9 +136,11 @@ namespace AgenticRacing.Vehicle
             if (Mathf.Abs(Steer) < 0.01f) return;
 
             float speed = Mathf.Abs(vFwd);
-            // No steering authority when nearly stopped; full at low speed;
-            // tapering to HighSpeedTurnFactor by MaxSpeed.
-            float speedT = Mathf.Clamp01(speed / config.SteerFadeInSpeed);
+            // Some authority even when stopped (MinSteerAuthority) so a pinned car
+            // can turn away from a wall; ramps to full by SteerFadeInSpeed; then
+            // tapers to HighSpeedTurnFactor by MaxSpeed.
+            float speedT = Mathf.Lerp(config.MinSteerAuthority, 1f,
+                                      Mathf.Clamp01(speed / Mathf.Max(0.01f, config.SteerFadeInSpeed)));
             float highT = Mathf.Clamp01(speed / config.MaxSpeed);
             float authority = speedT * Mathf.Lerp(1f, config.HighSpeedTurnFactor, highT);
 
