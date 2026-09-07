@@ -1759,3 +1759,30 @@ menos retorcidas, consultado con el dueño del proyecto):
 `meanLapProgress` alto y `stall`/`offTrack` bajos → la heurística es buen profesor sobre
 las pistas nuevas → `-record` → race08. Si el eval crashea al arrancar = algún seed
 1000-1008 no genera pista válida en 80 intentos → bajar `MinCornerRadius` a 16-18.
+
+### CAUSA RAÍZ (por fin): los muros de borde eran mallas de espesor cero (2026-09-07)
+
+El volcado de trayectoria en cada muerte lo dejó claro: en TODAS, `spd=0` fijo durante 3 s,
+`turn` bajo (0-8°, sin curva), `steer` chico constante, `brk=0`, `lateral` derivando
+despacio hacia afuera. Los autos **no chocan a velocidad ni derrapan** — se **frenan en
+seco cerca del borde y no re-arrancan** aunque estén a full throttle y a media pista. El
+auto que anda bien nunca toca el borde; en cuanto uno se corre, se traba, arrastra a
+~0.4 m/s → stall → respawn → repite. 8 de 9 spawns llevan a una deriva al borde.
+
+`TrackEdgeColliders` construía cada muro como un **`MeshCollider` de una cinta vertical sin
+espesor, con triángulos en ambas caras**. PhysX no puede resolver el contacto contra eso:
+la normal queda indefinida y la caja del auto **se clava en la geometría** en vez de
+rebotar. CLAUDE.md §5 asumía "el auto rebota en los muros" — no rebotaba.
+
+**Esto explica ~15 iteraciones de esta sesión**: no era la recompensa, ni la anticipación,
+ni la heurística, ni el radio de curva. Era que **cualquier roce con el borde clava el auto
+y mata el episodio**, y ningún controlador (heurístico o RL) maneja perfecto siempre.
+
+**Fix**: `TrackEdgeColliders` reescrito — cadena de `BoxCollider` solapados a lo largo de
+cada borde (uno cada ~12 m, 0.8 m de espesor, empujados apenas hacia afuera para no comer
+pista). Convexos → contacto robusto y barato; el ray sensor los detecta igual por tag.
+
+**Siguiente**: rebuild eval → `eval.exe -heuristic`. Espero un cambio cualitativo: la
+heurística debería dar vueltas (rebota o raspa el muro y sigue). Si es así → grabar demos
+→ race08. Y probablemente convenga re-evaluar si con muros que funcionan hace falta todo
+el andamiaje de imitación, o si un RL "limpio" ya pasa el criterio de Fase 2.
