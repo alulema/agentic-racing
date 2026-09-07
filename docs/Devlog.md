@@ -1637,3 +1637,40 @@ de física/recompensa primero.
 entrenamiento las tiene aún) → `--run-id=race06 --num-envs=4` (~1.7 h). No tocar nada
 hasta que termine. Mirar: `end reasons` (¿baja `stuck`/`offTrack`, sube `lap`?),
 `Cumulative Reward` (¿pasa el plateau de ~4-5?), `Episode Length` (¿sube sostenido?).
+
+### race06 = plateau otra vez → confirmado: brecha de RL, no del entorno. iter 7 (2026-09-07)
+
+`race06` (10M steps, con los arreglos de física/recompensa de `e718c7b`): **mismo plateau**.
+Cumulative Reward −37 → ~4.8 y plano desde ~2.7M. Episode Length ~100 (peor que race05).
+`end reasons`: **`offTrack` 98%**, `lap` 2%, `mean lapArc` ~207 m (~10% de vuelta). Entropía
+1.42→1.23, Value Loss 0.29→0.52 (subiendo).
+
+Contradicción que lo decide: **la heurística, con este mismo build, llevó un auto a 1691 m
+(82%) a 21 m/s. El RL se estanca en 207 m.** Mismo entorno → **es problema de aprendizaje
+del RL, no del entorno**. Los arreglos de física/recompensa solos no alcanzan.
+
+Qué tiene la heurística que el RL no:
+1. **Anticipación**: escanea 55 m de curvatura hacia adelante para fijar velocidad de
+   entrada. El RL solo "veía" con 9 raycasts a 40 m (2.7 s a 15 m/s). No ve venir la curva.
+2. Frena para las curvas explícitamente. El RL nunca aprendió (eval: `meanBrake` ~0.02) —
+   y la `slowPenalty` de iter 5 castigaba justo el frenado que hace falta.
+
+**iter 7 — darle al RL la percepción + la estructura de recompensa que funciona en la
+heurística** (obliga a reentrenar de cero, cambia el vector de observación):
+- **+3 observaciones de curvatura hacia adelante**: cambio de rumbo con signo de la
+  centerline en tramos ~0-22 / 18-45 / 40-75 m. `VectorObservationSize` 12 → 15
+  (`RaceAgent.ObsSize`, referenciado desde `TrainingArena`).
+- **Raycasts 40 → 70 m** (`RayPerceptionSensorComponent3D.RayLength`).
+- **Recompensa de velocidad con pico en una velocidad OBJETIVO por curvatura**
+  (`TargetSpeed()`, misma lógica que la heurística: `Lerp(straightSpeedFrac 0.42,
+  cornerSpeedFrac 0.12)` de `MaxSpeed` según el giro próximo). El reward cae a ambos lados
+  del objetivo → frenar en curva paga, pasarse de largo no. Reemplaza el `speedReward`
+  proporcional a la velocidad + la `slowPenalty` absoluta de iter 5.
+- Heurística: la reversa de escape ahora está acotada (`_wallJamTimer`/`_escapeUntil`).
+
+`race_ppo.yaml`: run-id race07, `max_steps` 10M.
+
+**Siguiente**: rebuild `train.exe` → `--run-id=race07 --num-envs=4` (~1.7 h). Si sigue
+plano tras esto → toca curriculum (empezar en seeds de baja curvatura) y/o red más grande
+(hoy 256×2). Si mejora → eval con el harness (`meanBrake` > 0, `meanLapProgress` alto) y a
+cerrar Fase 2.

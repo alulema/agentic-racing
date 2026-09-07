@@ -24,20 +24,27 @@ namespace AgenticRacing.Agents
     [RequireComponent(typeof(Rigidbody))]
     public sealed class RaceAgent : Agent
     {
+        /// <summary>Length of the CollectObservations vector. Keep
+        /// BehaviorParameters.VectorObservationSize (set in TrainingArena) in sync.
+        /// 2 speed + 4 track-relative + 3 curvature lookahead + 6 directive.</summary>
+        public const int ObsSize = 15;
+
         // NOTE: TrainingArena builds the agent in code with no field overrides, so
         // these run with the values below, not with anything serialized. Tuning =
         // edit here + rebuild the training player (docs/Devlog.md 2026-09-06).
-        // race01-04: policy would not learn to brake (meanBrake ~0.02 in eval) so
-        // it either crept at ~7 m/s to survive (race03) or blasted off-track /
-        // stalled within ~200 m (race04) — both ~9% of a lap. This pass removes
-        // the two ways to "win" without driving well: creeping is now penalised
-        // (slowPenalty), and 'stuck' no longer ends the episode as an escape.
+        //
+        // race01-06 all plateaued at ~10% of a lap while the scripted controller
+        // (same physics) drove 82%. It's an RL learning gap, not the environment:
+        // the agent had no way to see corners coming and the reward pushed raw
+        // speed. race07: 3 curvature-lookahead observations, and speed reward now
+        // peaks at a curvature-appropriate TARGET speed (brake into corners pays).
         [Header("Reward shaping")]
         [SerializeField] private float progressRewardPerMetre = 0.02f;
-        [SerializeField] private float speedRewardPerSec = 0.30f;     // scaled by forward-speed fraction
+        [SerializeField] private float speedRewardPerSec = 0.25f;      // peaks at the curvature-appropriate target speed
         [SerializeField] private float lineFollowRewardPerSec = 0.05f; // when moving, aligned, and near the racing line
-        [SerializeField] private float slowPenaltyPerSec = 0.25f;     // ramps in below targetSpeedFrac of max speed
-        [SerializeField] private float targetSpeedFrac = 0.30f;       // no slow penalty at/above this fraction of MaxSpeed
+        [SerializeField] private float slowPenaltyPerSec = 0.15f;      // extra, only when well under target speed
+        [SerializeField] private float straightSpeedFrac = 0.42f;      // target speed as a fraction of MaxSpeed on a straight
+        [SerializeField] private float cornerSpeedFrac = 0.12f;        // ...into the sharpest corners
         [SerializeField] private float edgeCreepPenaltyPerSec = 0.6f;
         [SerializeField] private float edgeSafeFrac = 0.55f;          // edge penalty ramps in past this fraction of the half-width
         [SerializeField] private float offTrackPenalty = 1.0f;
@@ -165,7 +172,7 @@ namespace AgenticRacing.Agents
                           $"sensors=[{DumpSensors()}]");
             }
 
-            if (_track == null) { for (int k = 0; k < 12; k++) sensor.AddObservation(0f); return; }
+            if (_track == null) { for (int k = 0; k < ObsSize; k++) sensor.AddObservation(0f); return; }
 
             float maxSpeed = Mathf.Max(1f, _car.Config.MaxSpeed);
             Vector3 v = _rb.linearVelocity;
@@ -193,11 +200,48 @@ namespace AgenticRacing.Agents
 
             sensor.AddObservation(_progress.Distance01);
 
+            // Curvature lookahead — the agent needs to see corners coming to brake
+            // for them (race01-06: no anticipation -> off-track at the first bend;
+            // the scripted controller, which scans ahead, drove 82% of a lap).
+            sensor.AddObservation(Mathf.Clamp(CenterlineTurnDeg(0f, 22f) / 90f, -1f, 1f));
+            sensor.AddObservation(Mathf.Clamp(CenterlineTurnDeg(18f, 45f) / 90f, -1f, 1f));
+            sensor.AddObservation(Mathf.Clamp(CenterlineTurnDeg(40f, 75f) / 90f, -1f, 1f));
+
             // Directive channels (§6.1) — 6 floats.
             sensor.AddObservation(_directive.Aggression);
             sensor.AddObservation(_directive.RiskTolerance);
             for (int k = 0; k < 4; k++)
                 sensor.AddObservation(_directive.Kind == (DirectiveKind)k ? 1f : 0f);
+        }
+
+        /// <summary>
+        /// Signed heading change (deg) of the centreline between <paramref name="fromM"/>
+        /// and <paramref name="toM"/> metres ahead of the car's nearest sample.
+        /// + = the track turns left. Shared by the observations, the target-speed
+        /// reward, and the heuristic.
+        /// </summary>
+        private float CenterlineTurnDeg(float fromM, float toM)
+        {
+            var c = _track.Centerline;
+            int n = c.Count;
+            float spacing = Mathf.Max(0.1f, _track.Length / n);
+            int s = _progress.NearestSample;
+            int i0 = s + Mathf.RoundToInt(fromM / spacing);
+            int i1 = s + Mathf.RoundToInt(toM / spacing);
+            Vector3 d0 = c[(i0 + 1) % n] - c[i0 % n];
+            Vector3 d1 = c[(i1 + 1) % n] - c[i1 % n];
+            d0.y = d1.y = 0f;
+            return Vector3.SignedAngle(d0, d1, Vector3.up);
+        }
+
+        /// <summary>Curvature-appropriate speed for what's just ahead: fast on a
+        /// straight, low into the sharpest nearby corner (mirrors the heuristic).</summary>
+        private float TargetSpeed()
+        {
+            float turn = Mathf.Max(Mathf.Abs(CenterlineTurnDeg(0f, 30f)),
+                                   Mathf.Abs(CenterlineTurnDeg(20f, 55f)));
+            return _car.Config.MaxSpeed *
+                   Mathf.Lerp(straightSpeedFrac, cornerSpeedFrac, Mathf.Clamp01(turn / 55f));
         }
 
         // Dumps the base Agent's private sensor list (name + flattened shape) so
@@ -246,18 +290,17 @@ namespace AgenticRacing.Agents
 
             AddReward(fwdMetres * progressRewardPerMetre);
 
-            // Speed and racing-line shaping. Both scale with the forward-speed
-            // fraction so they cannot be farmed at a standstill (that was the
-            // race01 failure mode: the policy settled for "creep forward safely").
+            // Speed shaping around a curvature-appropriate TARGET speed: reward
+            // peaks at target and falls off both ways, so braking into a corner
+            // pays and overcooking it doesn't. race01-06 rewarded raw speed and
+            // the policy never learned to brake (eval: meanBrake ~0.02).
             float maxSpeed = Mathf.Max(1f, _car.Config.MaxSpeed);
             float fwdFrac = Mathf.Clamp01(_car.ForwardSpeed / maxSpeed);
-            AddReward(speedRewardPerSec * fwdFrac * Time.fixedDeltaTime);
-
-            // Penalise crawling: ramps from 0 at targetSpeedFrac of MaxSpeed to
-            // full below a near-stop. Replaces the old flat per-step time penalty,
-            // which punished long episodes equally and so rewarded dying fast.
-            float slow = 1f - Mathf.Clamp01(fwdFrac / Mathf.Max(0.01f, targetSpeedFrac));
-            AddReward(-slowPenaltyPerSec * slow * Time.fixedDeltaTime);
+            float target = TargetSpeed();
+            float speedErr = (_car.ForwardSpeed - target) / Mathf.Max(1f, target); // signed, <0 = too slow
+            AddReward(speedRewardPerSec * Mathf.Clamp01(1f - Mathf.Abs(speedErr) * 1.3f) * Time.fixedDeltaTime);
+            if (speedErr < -0.3f)
+                AddReward(-slowPenaltyPerSec * (-speedErr - 0.3f) * Time.fixedDeltaTime);
 
             if (fwdFrac > 0.05f)
             {

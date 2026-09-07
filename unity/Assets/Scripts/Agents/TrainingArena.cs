@@ -99,7 +99,7 @@ namespace AgenticRacing.Agents
         {
             var bp = go.AddComponent<BehaviorParameters>();
             bp.BehaviorName = "RaceAgent";
-            bp.BrainParameters.VectorObservationSize = 12;
+            bp.BrainParameters.VectorObservationSize = RaceAgent.ObsSize;
             bp.BrainParameters.NumStackedVectorObservations = 1;
             bp.BrainParameters.ActionSpec = ActionSpec.MakeContinuous(3);
 
@@ -108,7 +108,7 @@ namespace AgenticRacing.Agents
             ray.DetectableTags = new List<string> { TrackEdgeColliders.EdgeTag };
             ray.RaysPerDirection = 4;          // 9 rays
             ray.MaxRayDegrees = 75f;
-            ray.RayLength = 40f;
+            ray.RayLength = 70f;              // was 40 — needs to see the corner before the car is in it
             ray.SphereCastRadius = 0.4f;
             ray.StartVerticalOffset = 0.3f;
             ray.EndVerticalOffset = 0.3f;
