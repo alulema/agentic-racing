@@ -44,9 +44,9 @@ namespace AgenticRacing.Track
             MinHarmonics = 2,
             MaxHarmonics = 3,
             MinHarmonicFreq = 2,
-            MaxHarmonicFreq = 5,
+            MaxHarmonicFreq = 4,
             HarmonicAmpMin = 0.12f,
-            HarmonicAmpMax = 0.30f,
+            HarmonicAmpMax = 0.24f,
             RadialJitterMin = -0.05f,
             RadialJitterMax = 0.05f,
             RadiusClampMin = 0.45f,
@@ -54,12 +54,15 @@ namespace AgenticRacing.Track
             AngularJitter = 0.35f,
             MinLength = 1500f,
             MaxLength = 2500f,
-            MinCornerRadius = 12f,
+            // 12 m corners are only navigable at ~20 m/s at full lock — no margin
+            // for an imperfect line, so neither the heuristic nor the RL could take
+            // them (Devlog 2026-09-07). 20 m is takeable at ~25 m/s with room.
+            MinCornerRadius = 20f,
             CenterlineSpacing = 2f,
             CurvatureStencil = 6f,
             TrackWidth = 12f,
             SamplesPerSegment = 120,
-            MaxAttempts = 40,
+            MaxAttempts = 80,   // headroom after tightening MinCornerRadius to 20 m
         };
     }
 

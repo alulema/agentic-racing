@@ -1735,3 +1735,27 @@ también al RL (mata la degeneración sawtooth si el agente la descubriera).
 
 **Siguiente**: rebuild eval → `eval.exe -heuristic` para confirmar que ahora el REPORT
 tiene `meanForwardSpeed` ~15-20 y `meanLapProgress` alto → `eval.exe -record` → race08.
+
+### Causa raíz: curvas de 12 m no navegables → subir MinCornerRadius (2026-09-07)
+
+El log `[Heur]` mostró que la heurística maneja bien (18-22 m/s, sin derrape) en los tramos
+suaves, pero con el stall check activo el 98% de los episodios terminan por `stall` a ~180 m:
+**los autos pegan una curva que no pueden tomar.**
+
+Cuenta: `TrackGenerator.TrackParams.Default.MinCornerRadius = 12f`. Con la física del auto,
+el radio de giro a full lock es ~11.5 m a 20 m/s y ~16 m a 25 m/s → una curva de 12 m es
+tomable solo al límite a 20 m/s y **imposible a 25**. Ni la heurística ni el RL frenan lo
+suficiente. El auto de 1595 m fue un seed con todas las curvas suaves.
+
+Cambios en `TrackParams.Default` (parámetro de Fase 1; afecta también el WebGL — pistas
+menos retorcidas, consultado con el dueño del proyecto):
+- `MinCornerRadius` 12 → **20 m** (tomable a ~25 m/s con margen).
+- `HarmonicAmpMax` 0.30 → 0.24, `MaxHarmonicFreq` 5 → 4 (pistas inherentemente más suaves,
+  menos rechazos del generador).
+- `MaxAttempts` 40 → 80 (headroom; si un seed no genera pista válida, `Generate` *lanza* y
+  rompería el arranque de la escena).
+
+**Siguiente**: rebuild eval → `eval.exe -heuristic`. Si el `REPORT` ahora tiene
+`meanLapProgress` alto y `stall`/`offTrack` bajos → la heurística es buen profesor sobre
+las pistas nuevas → `-record` → race08. Si el eval crashea al arrancar = algún seed
+1000-1008 no genera pista válida en 80 intentos → bajar `MinCornerRadius` a 16-18.
