@@ -8,13 +8,12 @@
 # El nombre "RaceAgent" tiene que coincidir con BehaviorParameters.BehaviorName
 # (ver TrainingArena.AddBehaviour).
 #
-# race07 (obs de anticipación + recompensa de velocidad objetivo) subió el reward
-# ~40% y bajó el Value Loss, pero seguía en ~10% de vuelta (offTrack 97%). Es
-# hard-exploration: el agente no descubre la maniobra de curva porque el 97% de
-# los intentos mueren en <2 s. race08 = imitación desde la heurística (que hace
-# 82% de vuelta): BC pre-entrena la política y GAIL le da recompensa de imitación
-# durante el entrenamiento. Requiere training/demos/*.demo — grabar con
-# `eval.exe -record` (ver training/README.md §5). Ver docs/Devlog.md.
+# race01-07 se estancaron en ~10% de vuelta. Causa (diagnosticada con el eval
+# harness, Devlog 2026-09-07): `ApplyLateralGrip` BORRABA la velocidad lateral en
+# vez de redirigirla, así que girar frenaba el auto -> RL/heurística aprendían a
+# no doblar. race08 = primera corrida con la física arreglada (grip redirige) +
+# pistas deliberadamente suaves (MinCornerRadius 30, menos armónicos) + la
+# recompensa de velocidad-objetivo de iter 7. PPO limpio, sin imitación.
 
 behaviors:
   RaceAgent:
@@ -42,18 +41,6 @@ behaviors:
       extrinsic:
         gamma: 0.995
         strength: 1.0
-      gail:
-        gamma: 0.99
-        strength: 0.15
-        demo_path: training/demos
-        use_actions: true
-
-    # Behavioural cloning: pre-train + keep nudging the policy toward the
-    # heuristic demos for the first ~2M steps, then it fades and RL takes over.
-    behavioral_cloning:
-      demo_path: training/demos
-      strength: 0.5
-      steps: 2000000
 
     keep_checkpoints: 20
     checkpoint_interval: 500000
