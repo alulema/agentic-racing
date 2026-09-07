@@ -1786,3 +1786,27 @@ pista). Convexos → contacto robusto y barato; el ray sensor los detecta igual 
 heurística debería dar vueltas (rebota o raspa el muro y sigue). Si es así → grabar demos
 → race08. Y probablemente convenga re-evaluar si con muros que funcionan hace falta todo
 el andamiaje de imitación, o si un RL "limpio" ya pasa el criterio de Fase 2.
+
+### Muros como sólido extruido + fix del trompo por spawn (2026-09-07)
+
+Los dos intentos con `BoxCollider` dieron `meanLapProgress` 2% (peor que la malla, 11%):
+cajas rectas de ~15/10 m que aproximan el arco del borde con una cuerda → los extremos de
+la caja sobresalen en la pista en curva. Y al mirar el volcado de trayectoria de nuevo:
+`steer` **exactamente constante** por 3.2 s con `spd≈0` y `lat` derivando de costado = el
+auto **trompea y desliza de lado**, cerca del spawn.
+
+Dos causas, no una:
+1. **Trompo por spawn**: `CleanSpawn` ponía el auto sobre la **racing line** (~5 m del
+   centro en curva), pero la heurística ahora tira fuerte a la **centerline**
+   (`crossCorr = carOffLeft*3`, ±25°). A 14 m/s → giro a tope → oscila → trompo. El único
+   auto que sobrevivía spawneaba en una recta (racing line ≈ centerline). Fix: `CleanSpawn`
+   spawnea en la centerline; `crossCorr` gain 3→1.4, clamp ±25→±13.
+2. **Muros**: reescritos como **sólido extruido cerrado** (caras interna + externa + techo
+   + piso, 1 m de espesor) — un `MeshCollider` por muro, sigue la curva exacta (sin
+   aproximación de cuerda), con normal de contacto bien definida. La malla vieja era una
+   cinta de espesor cero doble cara (normal indefinida → el auto se clavaba); las cajas
+   sobresalían en curva.
+
+**Siguiente**: rebuild eval → `eval.exe -heuristic`. Si `meanLapProgress` da un salto
+cualitativo → los dos bugs eran esto, y pivoteamos a reentrenar limpio (race08 sin BC/GAIL,
+con la config de recompensa actual) para ver si pasa Fase 2.

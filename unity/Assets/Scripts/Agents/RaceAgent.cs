@@ -142,24 +142,24 @@ namespace AgenticRacing.Agents
             _directive = RaceDirective.RandomEpisode(_rng);
 
             var center = _track.Centerline;
-            var lineForSpawn = _track.RacingLine;
             int n = center.Count;
             int i = _rng.Next(n);
             Vector3 trackDir = (center[(i + 1) % n] - center[i]);
             trackDir.y = 0f;
             trackDir.Normalize();
 
-            // CleanSpawn (set by the eval harness for demo recording): on the
-            // racing line, aligned, at speed — no heading/lateral noise. The noisy
-            // spawn is training-time episode diversity; for clean demo laps we
-            // want the controller to start from a fair pose.
+            // CleanSpawn (set by the eval harness): on the CENTRELINE, aligned, at
+            // speed — no heading/lateral noise. Must match what the heuristic
+            // steers toward (the centre): spawning on the racing line, which the
+            // heuristic's cross-track term then yanks toward the centre, sent the
+            // car into an instant oscillation -> spin (Devlog 2026-09-07). The
+            // noisy centre spawn is training-time episode diversity.
             float headNoise = CleanSpawn ? 0f : spawnHeadingNoiseDeg;
             float latNoise = CleanSpawn ? 0f : spawnLateralNoise;
             Vector3 fwd = Quaternion.Euler(0f, (float)(_rng.NextDouble() * 2 - 1) * headNoise, 0f) * trackDir;
 
             Vector3 side = new Vector3(-fwd.z, 0f, fwd.x);
-            Vector3 basePos = CleanSpawn ? lineForSpawn[i] : center[i];
-            Vector3 spawn = basePos + Vector3.up * 0.4f
+            Vector3 spawn = center[i] + Vector3.up * 0.4f
                             + side * (float)((_rng.NextDouble() * 2 - 1) * latNoise);
 
             _car.PlaceAt(spawn, fwd);
@@ -597,7 +597,10 @@ namespace AgenticRacing.Agents
             Vector3 toTarget = aim - _rb.position;
             toTarget.y = 0f;
             float headingErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
-            float crossCorrDeg = Mathf.Clamp(carOffLeft * 3f, -25f, 25f);  // left of centre -> steer right (+)
+            // Gentle cross-track pull toward centre — a strong one (gain 3, ±25°)
+            // combined with pure-pursuit slammed to full lock and oscillated the
+            // car into a spin near spawn.
+            float crossCorrDeg = Mathf.Clamp(carOffLeft * 1.4f, -13f, 13f);  // left of centre -> steer right (+)
             _steerSmooth = a[0] = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 11f, -1f, 1f);
 
             if (_dbgHeurT <= Time.time)
