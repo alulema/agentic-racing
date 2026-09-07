@@ -36,33 +36,35 @@ namespace AgenticRacing.Track
         public int SamplesPerSegment;   // spline density before arc-length resample
         public int MaxAttempts;         // deterministic seed re-derivations before giving up
 
+        // Deliberately gentle circuits. The demo is about the pilot<->strategist
+        // agentic loop, not a racing sim (CLAUDE.md §12) — the track needs a
+        // handful of numbered corners the strategist can reason about, not
+        // hairpins. Tightened harmonics + a 30 m minimum corner radius keep every
+        // bend takeable at speed with margin (Devlog 2026-09-07).
         public static TrackParams Default => new TrackParams
         {
-            MinControlPoints = 16,
-            MaxControlPoints = 22,
+            MinControlPoints = 14,
+            MaxControlPoints = 18,
             BaseRadius = 300f,
-            MinHarmonics = 2,
-            MaxHarmonics = 3,
+            MinHarmonics = 1,
+            MaxHarmonics = 2,
             MinHarmonicFreq = 2,
-            MaxHarmonicFreq = 4,
-            HarmonicAmpMin = 0.12f,
-            HarmonicAmpMax = 0.24f,
-            RadialJitterMin = -0.05f,
-            RadialJitterMax = 0.05f,
-            RadiusClampMin = 0.45f,
-            RadiusClampMax = 1.75f,
-            AngularJitter = 0.35f,
+            MaxHarmonicFreq = 3,
+            HarmonicAmpMin = 0.08f,
+            HarmonicAmpMax = 0.16f,
+            RadialJitterMin = -0.035f,
+            RadialJitterMax = 0.035f,
+            RadiusClampMin = 0.6f,
+            RadiusClampMax = 1.5f,
+            AngularJitter = 0.2f,
             MinLength = 1500f,
             MaxLength = 2500f,
-            // 12 m corners are only navigable at ~20 m/s at full lock — no margin
-            // for an imperfect line, so neither the heuristic nor the RL could take
-            // them (Devlog 2026-09-07). 20 m is takeable at ~25 m/s with room.
-            MinCornerRadius = 20f,
+            MinCornerRadius = 30f,
             CenterlineSpacing = 2f,
             CurvatureStencil = 6f,
             TrackWidth = 12f,
             SamplesPerSegment = 120,
-            MaxAttempts = 80,   // headroom after tightening MinCornerRadius to 20 m
+            MaxAttempts = 120,
         };
     }
 

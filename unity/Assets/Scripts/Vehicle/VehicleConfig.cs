@@ -46,13 +46,15 @@ namespace AgenticRacing.Vehicle
         [Range(0f, 1f)] public float MinSteerAuthority = 0.25f;
 
         [Header("Grip")]
-        [Tooltip("Lateral grip as an acceleration multiplier; higher = less sliding.")]
+        [Tooltip("Fraction of sideways velocity the tyres resolve per second " +
+                 "(scaled by dt). Higher = less drift.")]
         public float LateralGrip = 7f;
-        [Tooltip("Hard cap on the lateral-grip deceleration (m/s^2). Without it a " +
-                 "hard steer at speed makes grip scrub off almost all the car's " +
-                 "velocity in one step -> the car pirouettes to a stop instead of " +
-                 "cornering, and RL/heuristic learn to never turn (Devlog 2026-09-07).")]
-        public float MaxGripAccel = 16f;
+        [Tooltip("Of the sideways velocity the grip removes, this fraction is " +
+                 "redirected FORWARD (tyres turn the car's momentum, they don't " +
+                 "scrub the speed off). < 1 so there is always some scrub loss. " +
+                 "At 0 the model brakes the car on every steer and RL/heuristic " +
+                 "learn to never turn (Devlog 2026-09-07).")]
+        [Range(0f, 1f)] public float GripRedirect = 0.85f;
         [Tooltip("Extra downward force (N) to keep the car planted over crests.")]
         public float Downforce = 2000f;
 

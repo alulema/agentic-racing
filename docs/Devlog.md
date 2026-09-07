@@ -1834,3 +1834,21 @@ el controlador tiene tiempo de recuperar. `LateralGrip` 9 → 7.
 
 **Siguiente**: rebuild eval → `eval.exe -heuristic`. Espero por fin un salto: la heurística
 debería dar vueltas (dobla, desliza un poco, sigue). Si es así → reentrenar limpio.
+
+### Fix del grip (redirigir, no borrar) + pistas deliberadamente suaves (2026-09-07)
+
+Tras ~20 iteraciones sin mover el resultado (~10% de vuelta), acordado con el dueño del
+proyecto: el demo es sobre el loop agentic piloto<->estratega, no un sim de carreras
+(CLAUDE.md §12). Dos cambios, una prueba, y si no da señal → descope (óvalo simple).
+
+1. **`CarController.ApplyLateralGrip` redirige en vez de borrar**: quita una fracción
+   `LateralGrip*dt` de la velocidad lateral y devuelve `GripRedirect` (0.85) de esa
+   magnitud hacia +forward. El modelo viejo la eliminaba → cada giro frenaba el auto →
+   RL/heurística aprendían a no doblar. `MaxGripAccel` (del intento anterior) eliminado.
+2. **`TrackParams.Default` mucho más suave**: `MaxControlPoints` 22→18, `MaxHarmonics`
+   3→2, `MaxHarmonicFreq` 4→3, `HarmonicAmp` 0.12-0.24 → 0.08-0.16, `AngularJitter`
+   0.35→0.2, `RadiusClamp` 0.45-1.75 → 0.6-1.5, `MinCornerRadius` 20→30. Circuitos con
+   unas pocas curvas numeradas navegables a velocidad, no horquillas.
+
+**Siguiente**: rebuild eval → `eval.exe -heuristic`. Si la heurística da vueltas → señal
+real, reentrenar y AVANZAR a Fase 3/4 (el estratega, que es el punto). Si no → descope.

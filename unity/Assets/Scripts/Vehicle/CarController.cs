@@ -154,14 +154,18 @@ namespace AgenticRacing.Vehicle
 
         private void ApplyLateralGrip(Vector3 fwd)
         {
+            Vector3 v = _rb.linearVelocity;
             Vector3 right = transform.right;
-            float vRight = Vector3.Dot(_rb.linearVelocity, right);
-            // Cancel most of the sideways velocity each step; what leaks through
-            // is the slide/drift. Capped so a hard steer at speed makes the car
-            // slide wide, not brake to a pirouette (Devlog 2026-09-07).
-            float grip = Mathf.Clamp(-vRight * config.LateralGrip,
-                                     -config.MaxGripAccel, config.MaxGripAccel);
-            _rb.AddForce(right * grip, ForceMode.Acceleration);
+            float vRight = Vector3.Dot(v, right);
+
+            // Tyres REDIRECT the car's momentum along its heading; they don't
+            // scrub the speed off. Remove a fraction of the sideways velocity and
+            // put GripRedirect of that magnitude back along +forward. Deleting it
+            // outright (the old model) meant every steer braked the car, so
+            // RL/heuristic learned to never turn (Devlog 2026-09-07).
+            float k = Mathf.Clamp01(config.LateralGrip * Time.fixedDeltaTime);
+            float dSide = -vRight * k;
+            _rb.linearVelocity = v + right * dSide + fwd * (Mathf.Abs(dSide) * config.GripRedirect);
         }
 
         /// <summary>Places the car at a pose and clears its motion (grid reset).</summary>
