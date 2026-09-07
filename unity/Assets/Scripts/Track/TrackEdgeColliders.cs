@@ -21,8 +21,10 @@ namespace AgenticRacing.Track
         /// <summary>Tag on the wall colliders; must exist in TagManager.</summary>
         public const string EdgeTag = "TrackEdge";
 
-        private const int SegmentStep = 6;      // edge samples per box (~12 m)
+        private const int SegmentStep = 3;      // edge samples per box (~6 m chord)
         private const float WallThickness = 0.8f;
+        private const float OutwardGap = 1.0f;  // box inner face this far OUTSIDE the edge line,
+                                                // so a straight box never intrudes on a curve
 
         /// <summary>
         /// Creates two child GameObjects ("EdgeLeft" / "EdgeRight") under
@@ -71,25 +73,26 @@ namespace AgenticRacing.Track
                 if (len < 1e-3f) continue;
                 along /= len;
 
-                // Push the box centre slightly outside the drivable ribbon so the
-                // wall doesn't eat into the racing surface. edge[i] was built as
-                // center[i] +/- side*half, so (edge - center) is the outward normal.
-                Vector3 mid = 0.5f * (a + b);
-                Vector3 outward = edge[i] - center[i];
+                // Outward normal = mean of the two endpoints' (edge - center)
+                // directions (edge[k] was built as center[k] +/- side*half).
+                // Push the box out by OutwardGap + half its thickness so a
+                // straight box never bulges into the drivable ribbon on a curve
+                // (the chord midpoint sits inside the arc by the sagitta).
+                Vector3 outward = (a - center[i]).normalized + (b - center[j]).normalized;
                 outward.y = 0f;
-                if (outward.sqrMagnitude > 1e-4f) outward.Normalize();
+                outward = outward.sqrMagnitude > 1e-4f ? outward.normalized : (a - center[i]).normalized;
 
+                Vector3 mid = 0.5f * (a + b);
                 var seg = new GameObject($"seg{i}");
                 seg.transform.SetParent(wall.transform, false);
                 seg.transform.position = mid + Vector3.up * (height * 0.5f)
-                                             + outward * (WallThickness * 0.5f);
+                                             + outward * (OutwardGap + WallThickness * 0.5f);
                 seg.transform.rotation = Quaternion.LookRotation(along, Vector3.up);
                 SetTagIfPresent(seg, EdgeTag);
 
                 var box = seg.AddComponent<BoxCollider>();
-                // Overlap neighbours a touch so there are no gaps on the outside
-                // of a curve.
-                box.size = new Vector3(WallThickness, height, len + SegmentStep * 0.5f);
+                // Overlap neighbours so there are no gaps on the outside of a curve.
+                box.size = new Vector3(WallThickness, height, len + SegmentStep * 1.5f);
             }
         }
 
