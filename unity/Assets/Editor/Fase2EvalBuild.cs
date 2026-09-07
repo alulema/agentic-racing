@@ -36,28 +36,26 @@ namespace AgenticRacing.EditorTools
 
         public static void Build()
         {
+            // A model is optional: `eval.exe -heuristic` ignores it. Bake it when
+            // it's there, warn and carry on when it isn't.
             var modelSrc = ResolveModelPath();
-            if (!File.Exists(modelSrc))
+            if (File.Exists(modelSrc))
             {
-                Debug.LogError($"[Fase2EvalBuild] model not found: {modelSrc}");
-                if (Application.isBatchMode) EditorApplication.Exit(1);
-                return;
+                Directory.CreateDirectory(ResourceDir);
+                File.Copy(modelSrc, AssetPath, true);
+                AssetDatabase.ImportAsset(AssetPath, ImportAssetOptions.ForceUpdate);
+                AssetDatabase.Refresh();
+
+                if (AssetDatabase.LoadAssetAtPath<ModelAsset>(AssetPath) == null)
+                    Debug.LogWarning($"[Fase2EvalBuild] {AssetPath} did not import as a ModelAsset " +
+                                     "(is com.unity.ai.inference healthy?). -heuristic will still work.");
+                else
+                    Debug.Log($"[Fase2EvalBuild] baked model from {modelSrc}");
             }
-
-            Directory.CreateDirectory(ResourceDir);
-            File.Copy(modelSrc, AssetPath, true);
-            AssetDatabase.ImportAsset(AssetPath, ImportAssetOptions.ForceUpdate);
-            AssetDatabase.Refresh();
-
-            var model = AssetDatabase.LoadAssetAtPath<ModelAsset>(AssetPath);
-            if (model == null)
+            else
             {
-                Debug.LogError($"[Fase2EvalBuild] {AssetPath} did not import as a ModelAsset " +
-                               "(is com.unity.ai.inference healthy?).");
-                if (Application.isBatchMode) EditorApplication.Exit(1);
-                return;
+                Debug.LogWarning($"[Fase2EvalBuild] no model at {modelSrc} — build is -heuristic only.");
             }
-            Debug.Log($"[Fase2EvalBuild] baked model from {modelSrc}");
 
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             var go = new GameObject("Eval");

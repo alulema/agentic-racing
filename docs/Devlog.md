@@ -1530,3 +1530,41 @@ promete). run-id race05.
 `Player-0.log` el split de `end reasons` (ahora `stuck` no debería dominar) y `mean lapArc`.
 Después evaluar el `.onnx` con el harness: lo que quiero ver es `meanBrake` > 0 y
 `meanLapProgress` subiendo por encima del 9%.
+
+### race05 — falla en la misma curva, ahora por `offTrack`; ¿es la pista manejable? (2026-09-07)
+
+`race05` (6M steps, iter 5). El exploit de `stuck` **desapareció** (2-3%) pero:
+
+| | 50k | ~2.7M | 6M |
+|---|---|---|---|
+| Cumulative Reward | −34 | ~4.9 | **~4.8** (plateau) |
+| Episode Length | 694 | ~117 | ~113 (~2.3 s) |
+| Value Loss | 0.15 | 0.55 | 0.52 (alto) |
+
+**`end reasons`: `offTrack` 95-97%**, `lap` 2%, `stuck` 2%. `mean lapArc` **bajó a ~180 m**
+(era 245). O sea: el auto ahora va más rápido pero se sale de pista a los ~180 m, ~2.3 s.
+Es el modo "acelera y se estrella" de race04 pero más marcado — con reptar penalizado, la
+única estrategia que encontró es ir rápido, y **no puede tomar la primera curva**.
+
+Cinco corridas, cinco variantes de recompensa, **el mismo fallo**: el auto no pasa la
+primera curva de verdad (~180-245 m). Ya no parece un problema de pesos de recompensa. La
+`slowPenalty` de iter 5 puede incluso estar impidiendo aprender a frenar (frenar para una
+curva baja la velocidad → dispara la penalización justo cuando hace falta).
+
+**Experimento decisivo**: un **controlador scripted** (racing-line pure-pursuit + control de
+velocidad que frena según la curvatura próxima) — si *él* da vueltas, el problema es de
+aprendizaje/recompensa; si *él tampoco*, es la física del auto o el trazado (curvas
+demasiado cerradas), y ninguna recompensa lo arregla.
+
+Implementado:
+- `RaceAgent.Heuristic()` reescrito: seguidor autónomo de `RacingLine` (antes era solo
+  teclado, tras `#if ENABLE_LEGACY_INPUT_MANAGER`). Es también la semilla de la heurística
+  fija de Fase 6.3.
+- `EvalRunner` + `eval.exe -heuristic`: corre `BehaviorType.HeuristicOnly` en vez de cargar
+  un modelo. `Fase2EvalBuild` ya no exige que exista el `.onnx`.
+
+**Siguiente**: rebuild el eval player → `eval.exe -heuristic` y `eval.exe` (modelo race05).
+Comparar `meanLapProgress` y `meanBrake`. Si la heurística da vueltas y el modelo no →
+problema de RL (subir exploración, quitar/suavizar `slowPenalty`, reward de trazada más
+fuerte). Si la heurística tampoco → revisar `CarController` (grip lateral, `HighSpeedTurnFactor`)
+y la validación de curvatura de Fase 1.

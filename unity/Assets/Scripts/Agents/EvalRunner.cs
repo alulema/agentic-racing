@@ -29,15 +29,25 @@ namespace AgenticRacing.Agents
         private float _trackLen;
         private float _startTime;
         private bool _reported;
+        private bool _heuristic;
 
         private void Start()
         {
-            var model = Resources.Load<ModelAsset>(modelResource);
-            if (model == null)
+            // `eval.exe -heuristic` runs RaceAgent.Heuristic (the scripted
+            // racing-line follower) instead of a trained model — the "can this
+            // track be driven at all?" reference.
+            _heuristic = System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-heuristic") >= 0;
+
+            ModelAsset model = null;
+            if (!_heuristic)
             {
-                Debug.LogError($"[Eval] no ModelAsset at Resources/{modelResource}");
-                Application.Quit(1);
-                return;
+                model = Resources.Load<ModelAsset>(modelResource);
+                if (model == null)
+                {
+                    Debug.LogError($"[Eval] no ModelAsset at Resources/{modelResource}");
+                    Application.Quit(1);
+                    return;
+                }
             }
 
             var arenas = FindObjectsByType<TrainingArena>(FindObjectsSortMode.None);
@@ -46,12 +56,19 @@ namespace AgenticRacing.Agents
             int n = 0;
             foreach (var agent in FindObjectsByType<RaceAgent>(FindObjectsSortMode.None))
             {
-                // Set the model BEFORE switching Behavior Type: flipping to
-                // InferenceOnly while Model is still null throws
-                // "Can't use Behavior Type InferenceOnly without a model".
-                // ML-Agents' InferenceDevice: Burst == CPU inference (no CPU member).
-                agent.SetModel("RaceAgent", model, InferenceDevice.Burst);
-                agent.GetComponent<BehaviorParameters>().BehaviorType = BehaviorType.InferenceOnly;
+                if (_heuristic)
+                {
+                    agent.GetComponent<BehaviorParameters>().BehaviorType = BehaviorType.HeuristicOnly;
+                }
+                else
+                {
+                    // Set the model BEFORE switching Behavior Type: flipping to
+                    // InferenceOnly while Model is still null throws
+                    // "Can't use Behavior Type InferenceOnly without a model".
+                    // ML-Agents' InferenceDevice: Burst == CPU inference.
+                    agent.SetModel("RaceAgent", model, InferenceDevice.Burst);
+                    agent.GetComponent<BehaviorParameters>().BehaviorType = BehaviorType.InferenceOnly;
+                }
                 var car = agent.GetComponent<CarController>();
                 if (car != null) _cars.Add(car);
                 n++;
@@ -59,8 +76,8 @@ namespace AgenticRacing.Agents
 
             RaceAgent.AnyEpisodeEnded += OnEpisodeEnded;
             _startTime = Time.time;
-            Debug.Log($"[Eval] model=Resources/{modelResource} agents={n} cars={_cars.Count} " +
-                      $"trackLen={_trackLen:F0}m window={evalSeconds:F0}s");
+            Debug.Log($"[Eval] {(_heuristic ? "policy=HEURISTIC" : "model=Resources/" + modelResource)} " +
+                      $"agents={n} cars={_cars.Count} trackLen={_trackLen:F0}m window={evalSeconds:F0}s");
             if (n == 0)
             {
                 Debug.LogError("[Eval] no RaceAgent found in the scene");
@@ -110,7 +127,7 @@ namespace AgenticRacing.Agents
                 .Select(k => $"{k.Key}={100f * k.Value / e:F0}%"));
 
             Debug.Log(
-                $"[Eval] REPORT model=Resources/{modelResource}\n" +
+                $"[Eval] REPORT {(_heuristic ? "policy=HEURISTIC" : "model=Resources/" + modelResource)}\n" +
                 $"  episodes={_epCount}  meanEpisodeSteps={meanSteps:F0} (~{meanSteps * Time.fixedDeltaTime:F1}s)  " +
                 $"meanLapProgress={meanLapFrac * 100f:F0}% of a lap\n" +
                 $"  end reasons: {split}\n" +

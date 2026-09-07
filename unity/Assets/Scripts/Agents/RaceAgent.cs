@@ -364,16 +364,48 @@ namespace AgenticRacing.Agents
                 AddReward(-wallHitPenalty);
         }
 
-#if ENABLE_LEGACY_INPUT_MANAGER
+        /// <summary>
+        /// Autonomous racing-line follower: pure-pursuit steering toward a
+        /// speed-scaled lookahead point on <see cref="TrackData.RacingLine"/>,
+        /// plus brake-into / accelerate-out speed control from the heading change
+        /// of the line just ahead. Not used in training; it is the reference
+        /// "can this track even be driven?" controller, run via the eval harness
+        /// (EvalRunner with <c>-heuristic</c>), and the seed of the Fase 6.3 fixed
+        /// heuristic strategy.
+        /// </summary>
         public override void Heuristic(in ActionBuffers actionsOut)
         {
             var a = actionsOut.ContinuousActions;
-            a[0] = (Input.GetKey(KeyCode.RightArrow) || Input.GetKey(KeyCode.D) ? 1f : 0f)
-                   - (Input.GetKey(KeyCode.LeftArrow) || Input.GetKey(KeyCode.A) ? 1f : 0f);
-            a[1] = (Input.GetKey(KeyCode.UpArrow) || Input.GetKey(KeyCode.W) ? 1f : 0f)
-                   - (Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.S) ? 1f : 0f);
-            a[2] = Input.GetKey(KeyCode.Space) ? 1f : 0f;
+            if (_track == null) { a[0] = a[1] = a[2] = 0f; return; }
+
+            var line = _track.RacingLine;
+            int n = line.Count;
+            int s = _progress.NearestSample;
+            float spacing = Mathf.Max(0.1f, _track.Length / n);
+            float speed = Mathf.Max(0f, _car.ForwardSpeed);
+            float maxSpeed = Mathf.Max(1f, _car.Config.MaxSpeed);
+
+            // Pure-pursuit steering toward a lookahead point (further when faster).
+            float lookaheadM = Mathf.Clamp(6f + speed * 0.9f, 8f, 45f);
+            int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
+            Vector3 toTarget = line[(s + laSteps) % n] - _rb.position;
+            toTarget.y = 0f;
+            float steerErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
+            a[0] = Mathf.Clamp(steerErrDeg / 25f, -1f, 1f);
+
+            // Heading change of the line over the next ~35 m => how sharp the
+            // corner ahead is => target speed.
+            int curveSteps = Mathf.Max(2, Mathf.RoundToInt(35f / spacing));
+            Vector3 d0 = line[(s + 1) % n] - line[s];
+            Vector3 d1 = line[(s + curveSteps + 1) % n] - line[(s + curveSteps) % n];
+            d0.y = d1.y = 0f;
+            float turnAheadDeg = Mathf.Abs(Vector3.SignedAngle(d0, d1, Vector3.up));
+            float targetSpeed = Mathf.Lerp(maxSpeed * 0.55f, maxSpeed * 0.14f,
+                                           Mathf.Clamp01(turnAheadDeg / 70f));
+
+            if (speed < targetSpeed - 1f) { a[1] = 1f; a[2] = 0f; }
+            else if (speed > targetSpeed + 2f) { a[1] = 0f; a[2] = Mathf.Clamp01((speed - targetSpeed) / 6f); }
+            else { a[1] = 0.3f; a[2] = 0f; }
         }
-#endif
     }
 }
