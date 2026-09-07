@@ -345,6 +345,14 @@ namespace AgenticRacing.Agents
             AnyEpisodeEnded?.Invoke(reason, _episodeSteps, _lapArc);
             _endTotal++;
             _lapArcSum += _lapArc;
+
+            // First ~24 endings: where and how did it die? Pins down whether the
+            // policy/heuristic dies at a repeatable spot on the lap (a specific
+            // corner) and in what state.
+            if (_endTotal <= 24)
+                Debug.Log($"[RaceAgent] end #{_endTotal} '{reason}': lap%={_progress.Distance01 * 100f:F0} " +
+                          $"lapArc={_lapArc:F0}m steps={_episodeSteps} speed={_car.ForwardSpeed:F1} " +
+                          $"lateral={_progress.LateralOffset:F1}/{_halfWidth:F1}m");
             _endRecent.Enqueue(reason);
             while (_endRecent.Count > EndWindow) _endRecent.Dequeue();
             if (_endTotal % EndWindow == 0)
@@ -385,27 +393,39 @@ namespace AgenticRacing.Agents
             float speed = Mathf.Max(0f, _car.ForwardSpeed);
             float maxSpeed = Mathf.Max(1f, _car.Config.MaxSpeed);
 
-            // Pure-pursuit steering toward a lookahead point (further when faster).
-            float lookaheadM = Mathf.Clamp(6f + speed * 0.9f, 8f, 45f);
+            // Steering = pure-pursuit toward a speed-scaled lookahead point on the
+            // racing line, plus a cross-track term that pulls the car back onto
+            // the line when it has drifted off.
+            float lookaheadM = Mathf.Clamp(10f + speed * 1.2f, 12f, 55f);
             int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
             Vector3 toTarget = line[(s + laSteps) % n] - _rb.position;
             toTarget.y = 0f;
-            float steerErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
-            a[0] = Mathf.Clamp(steerErrDeg / 25f, -1f, 1f);
+            float headingErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
 
-            // Heading change of the line over the next ~35 m => how sharp the
-            // corner ahead is => target speed.
-            int curveSteps = Mathf.Max(2, Mathf.RoundToInt(35f / spacing));
-            Vector3 d0 = line[(s + 1) % n] - line[s];
-            Vector3 d1 = line[(s + curveSteps + 1) % n] - line[(s + curveSteps) % n];
-            d0.y = d1.y = 0f;
-            float turnAheadDeg = Mathf.Abs(Vector3.SignedAngle(d0, d1, Vector3.up));
-            float targetSpeed = Mathf.Lerp(maxSpeed * 0.55f, maxSpeed * 0.14f,
-                                           Mathf.Clamp01(turnAheadDeg / 70f));
+            Vector3 left = new Vector3(-_progress.Tangent.z, 0f, _progress.Tangent.x);
+            float crossTrackM = Vector3.Dot(_rb.position - line[s], left); // + = car is left of the line
+            float crossCorrDeg = Mathf.Clamp(crossTrackM * 4f, -30f, 30f);  // left of line -> steer right (+)
+
+            a[0] = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 14f, -1f, 1f);
+
+            // Sharpest heading change of the line anywhere in the next ~55 m =>
+            // the corner we are about to reach => target entry speed.
+            int scan = Mathf.Max(2, Mathf.RoundToInt(55f / spacing));
+            int seg = Mathf.Max(1, Mathf.RoundToInt(8f / spacing));
+            float turnAheadDeg = 0f;
+            for (int k = 0; k < scan; k += seg)
+            {
+                Vector3 e0 = line[(s + k + 1) % n] - line[(s + k) % n];
+                Vector3 e1 = line[(s + k + seg + 1) % n] - line[(s + k + seg) % n];
+                e0.y = e1.y = 0f;
+                turnAheadDeg = Mathf.Max(turnAheadDeg, Mathf.Abs(Vector3.SignedAngle(e0, e1, Vector3.up)));
+            }
+            float targetSpeed = Mathf.Lerp(maxSpeed * 0.42f, maxSpeed * 0.11f,
+                                           Mathf.Clamp01(turnAheadDeg / 55f));
 
             if (speed < targetSpeed - 1f) { a[1] = 1f; a[2] = 0f; }
-            else if (speed > targetSpeed + 2f) { a[1] = 0f; a[2] = Mathf.Clamp01((speed - targetSpeed) / 6f); }
-            else { a[1] = 0.3f; a[2] = 0f; }
+            else if (speed > targetSpeed + 1f) { a[1] = 0f; a[2] = Mathf.Clamp01((speed - targetSpeed) / 5f); }
+            else { a[1] = 0.4f; a[2] = 0f; }
         }
     }
 }
