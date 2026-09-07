@@ -490,34 +490,45 @@ namespace AgenticRacing.Agents
             float carOffLeft = Vector3.Dot(_rb.position - center[s], left); // + = car left of centre
             Vector3 trackDir = _progress.Tangent;
 
-            // Recovery: slow for a sustained moment anywhere (pinned on a wall, or
-            // circling mid-track because it chased a lookahead point across the
-            // track) -> a short reverse burst steering to line up with the local
-            // track direction, then hand back to normal control. Covers both
-            // failure modes seen in the -heuristic eval.
+            // Recovery. Two cases:
+            //  - Slow but NOT against a wall -> just re-align with the local track
+            //    direction and floor it FORWARD. Reversing here was the death
+            //    spiral in the -heuristic eval: reverse -> no lap progress ->
+            //    stall check kills it (end# speeds were negative).
+            //  - Slow AND jammed against an edge -> a short reverse burst is the
+            //    only way off; time-boxed so it can't loop.
             bool slow = speed < 1.5f;
-            _wallJamTimer = slow ? _wallJamTimer + Time.fixedDeltaTime : 0f;
-            if (Time.time < _escapeUntil || _wallJamTimer > 1.2f)
+            bool againstWall = Mathf.Abs(carOffLeft) > 0.75f * _halfWidth;
+            float noseErr = Vector3.SignedAngle(transform.forward, trackDir, Vector3.up);
+
+            _wallJamTimer = (slow && againstWall) ? _wallJamTimer + Time.fixedDeltaTime : 0f;
+            if (Time.time < _escapeUntil || _wallJamTimer > 1.0f)
             {
-                if (_wallJamTimer > 1.2f) { _escapeUntil = Time.time + 0.7f; _wallJamTimer = 0f; }
-                float noseErr = Vector3.SignedAngle(transform.forward, trackDir, Vector3.up);
+                if (_wallJamTimer > 1.0f) { _escapeUntil = Time.time + 0.6f; _wallJamTimer = 0f; }
                 a[0] = Mathf.Clamp(-noseErr / 20f, -1f, 1f); // reversing inverts steer sense
                 a[1] = -1f;
                 a[2] = 0f;
                 return;
             }
+            if (slow)
+            {
+                a[0] = Mathf.Clamp((noseErr - carOffLeft * 2f) / 18f, -1f, 1f);
+                a[1] = 1f;
+                a[2] = 0f;
+                return;
+            }
 
-            // Sharpest heading change of the line anywhere in the next ~60 m =>
-            // the corner we're about to reach => target entry speed. Slow HARD
-            // for real corners; the arcade car can turn a ~3 m radius at 6 m/s,
-            // so if it actually slows it makes any corner.
+            // Sharpest heading change of the CENTRELINE anywhere in the next ~60 m
+            // => the corner we're about to reach => target entry speed. (Scan the
+            // centreline, not the racing line, since we drive down the middle now;
+            // the racing line's apex-cut reads gentler than the corner really is.)
             int scan = Mathf.Max(2, Mathf.RoundToInt(60f / spacing));
             int seg = Mathf.Max(1, Mathf.RoundToInt(8f / spacing));
             float turnAheadDeg = 0f;
             for (int k = 0; k < scan; k += seg)
             {
-                Vector3 e0 = line[(s + k + 1) % n] - line[(s + k) % n];
-                Vector3 e1 = line[(s + k + seg + 1) % n] - line[(s + k + seg) % n];
+                Vector3 e0 = center[(s + k + 1) % n] - center[(s + k) % n];
+                Vector3 e1 = center[(s + k + seg + 1) % n] - center[(s + k + seg) % n];
                 e0.y = e1.y = 0f;
                 turnAheadDeg = Mathf.Max(turnAheadDeg, Mathf.Abs(Vector3.SignedAngle(e0, e1, Vector3.up)));
             }
@@ -533,7 +544,10 @@ namespace AgenticRacing.Agents
             // (the filter lagged corner entry and the car ran wide into the wall).
             float lookaheadM = Mathf.Clamp(8f + speed * 0.8f, 8f, 32f);
             int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
-            Vector3 aim = Vector3.Lerp(line[(s + laSteps) % n], center[(s + laSteps) % n], 0.4f);
+            // Aim mostly at the centreline (0.8 toward centre): the racing line
+            // hugs the walls, and "lap without leaving the track" (Fase 2) wants
+            // margin, not the fast line. Racing-line optimisation is Fase 3+.
+            Vector3 aim = Vector3.Lerp(line[(s + laSteps) % n], center[(s + laSteps) % n], 0.8f);
             Vector3 toTarget = aim - _rb.position;
             toTarget.y = 0f;
             float headingErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
