@@ -2008,4 +2008,36 @@ pelotón y repetir antes de pasar a Fase 4.
 
 - [x] Paso 5 — limpieza de `Debug.Log`.
 - [ ] Paso 4 — documentar el intento RL race01-08 para el post técnico (no bloquea Fase 4).
-- [ ] Fase 3 Lite — falta la corrida `-population` y su tabla de tiempos.
+- [x] Fase 3 Lite — corrida `-population` hecha (ver tabla abajo); P4 re-tuneada, falta 1 re-run de verificación.
+
+**Línea base `-population` (12 arenas, 2 por miembro, 360 s) — 2026-09-08**
+
+    [Eval] REPORT policy=HEURISTIC
+      episodes=45  meanEpisodeSteps=4451 (~89.0s)  meanLapProgress=99% of a lap
+      end reasons: lap=100%
+      meanForwardSpeed=22.0 m/s  meanThrottle=0.51  meanBrake=0.13  meanAbsSteer=0.06
+
+    | miembro       | Kind     | agg  | risk | laps | mean   | min   | max   |
+    |---------------|----------|------|------|------|--------|-------|-------|
+    | P1-Balanced   | Push     | 0.50 | 0.50 |  8   |  88.4s | 87.5  | 89.0  |
+    | P2-LateBrake  | Attack   | 0.62 | 0.55 |  8   |  85.8s | 84.8  | 87.4  |
+    | P3-Defensive  | Defend   | 0.45 | 0.40 |  7   |  89.5s | 88.0  | 90.1  |
+    | P4-Smooth     | Conserve | 0.52 | 0.45 |  6   |  96.9s | 96.7  | 97.1  |
+    | P5-Aggro      | Attack   | 0.58 | 0.62 |  8   |  86.4s | 85.9  | 87.4  |
+    | P6-Steady     | Push     | 0.46 | 0.48 |  8   |  89.2s | 88.2  | 89.9  |
+    spread: 85.8s .. 96.9s  (+11.1s, 13% del más rápido)
+
+**Lectura**: 100% de vueltas completadas (45/45), varianza intra-miembro <1.5 s — la
+población es viable y determinista. **Cinco de los seis caen en una banda de 85.8–89.5 s
+(3.7 s, ~4%)**: eso está emparejado. El único outlier es **P4-Smooth (Conserve), 8 s más
+lento** que el siguiente. Causa: la rama `Conserve` de `RaceAgent.Heuristic` aplica
+`aggSpeed *= 0.9` y el `centreBlend` más alto (0.92), así que con `agg` mid-pack queda muy
+por detrás. Es a la vez el más consistente (min/max 96.7–97.1, 0.4 s) — que es justo lo que
+`Conserve` significa (§6.5) — pero un piloto 8 s/vuelta más lento se va al fondo y se queda
+ahí en la Fase 6.3, confundiendo posición de parrilla con efecto del estratega.
+
+**Ajuste**: P4 sube a `Conserve, agg 0.72, risk 0.50` para compensar el recorte de la rama
+`Conserve` sin tocar la semántica de la directiva (sigue con el sesgo de línea al centro).
+Estimado ~90 s → spread esperado ~5 s / ~6%. **Pendiente (humano)**: rebuild del eval
+player + re-run `-population` para confirmar; si P4 sigue siendo outlier, subir `agg` otro
+escalón. Cuando el spread baje de ~6 s, la población queda cerrada como línea base de §5.

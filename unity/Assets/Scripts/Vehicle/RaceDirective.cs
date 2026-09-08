@@ -80,19 +80,23 @@ namespace AgenticRacing.Vehicle
         /// (<c>RaceAgent.Heuristic</c>) driven by six directive presets, so it is
         /// pace-matched by construction instead of by hand-picking checkpoints
         /// (§5 warns that spaced checkpoints just make the last one win every
-        /// time). The presets stay mid-range and close together on purpose — a
-        /// wide Aggression spread makes one "pilot" lap seconds faster than
-        /// another and contaminates the Fase 6.3 LLM-vs-heuristic comparison
-        /// (§11). The eval harness <c>-population</c> mode runs them head to head
-        /// on the fixed oval and reports mean lap time per member — the §5
-        /// baseline every Fase 6.3 result is read against.
+        /// time). The presets are tuned to land within a few seconds of each
+        /// other on the fixed oval — a wide lap-time spread makes one "pilot"
+        /// finish ahead every race regardless of the strategist and contaminates
+        /// the Fase 6.3 LLM-vs-heuristic comparison (§11). Aggression is the
+        /// pace lever; P4 carries a higher value than the rest only to offset
+        /// the Conserve branch's speed cut in <c>RaceAgent.Heuristic</c> so its
+        /// lap time rejoins the pack while its line bias stays distinct.
+        /// Measured baseline (12-arena <c>-population</c> run, 2026-09-08): five
+        /// members in an 85.8-89.5 s band; see docs/Devlog.md. The eval harness
+        /// <c>-population</c> mode is what produces that table.
         /// </summary>
         public static readonly PopulationMember[] Population =
         {
             new PopulationMember("P1-Balanced",  DirectiveKind.Push,     0.50f, 0.50f),
             new PopulationMember("P2-LateBrake", DirectiveKind.Attack,   0.62f, 0.55f),
             new PopulationMember("P3-Defensive", DirectiveKind.Defend,   0.45f, 0.40f),
-            new PopulationMember("P4-Smooth",    DirectiveKind.Conserve, 0.52f, 0.45f),
+            new PopulationMember("P4-Smooth",    DirectiveKind.Conserve, 0.72f, 0.50f),
             new PopulationMember("P5-Aggro",     DirectiveKind.Attack,   0.58f, 0.62f),
             new PopulationMember("P6-Steady",    DirectiveKind.Push,     0.46f, 0.48f),
         };
