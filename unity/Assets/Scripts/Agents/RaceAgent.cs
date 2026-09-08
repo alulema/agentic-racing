@@ -374,6 +374,11 @@ namespace AgenticRacing.Agents
         /// <see cref="ForcedDirective"/>.</summary>
         internal RaceDirective? InstanceDirective;
 
+        /// <summary>Directive→controller mapping (§6.5). Left null in the
+        /// training/eval arenas (they use <see cref="StrategyDirectiveMap.Default"/>);
+        /// the Fase 4 race scene assigns a shared calibrated asset.</summary>
+        internal StrategyDirectiveMap DirectiveMap;
+
         private void ReportEpisodeEnd(string reason)
         {
             _endReported = true;
@@ -455,28 +460,21 @@ namespace AgenticRacing.Agents
                 turnAheadDeg = Mathf.Max(turnAheadDeg, Mathf.Abs(Vector3.SignedAngle(e0, e1, Vector3.up)));
             }
             // --- Directive modulation (§6.5) -----------------------------------
-            // The strategist's only write surface. Aggression sets pace / braking
-            // margin; Kind sets the line bias; RiskTolerance trims how close to
-            // the edge the car will run. These are the same channels the policy
-            // sees in its observations (§6.1); the heuristic reads them directly.
+            // The strategist's only write surface. The mapping directive ->
+            // (speed scale, line bias, braking margin) lives in a single
+            // StrategyDirectiveMap so the RL/heuristic pilot and the Fase 4 LLM
+            // strategist agree on exactly what a directive does. These are the
+            // same channels the policy sees in its observations (§6.1).
             float agg = Mathf.Clamp01(_directive.Aggression);
-            float risk = Mathf.Clamp01(_directive.RiskTolerance);
-            float aggSpeed = Mathf.Lerp(0.86f, 1.16f, agg);
-            float centreBlend = _directive.Kind switch
-            {
-                DirectiveKind.Attack => 0.45f,
-                DirectiveKind.Push => 0.40f,
-                DirectiveKind.Defend => 0.78f,
-                DirectiveKind.Conserve => 0.92f,
-                _ => 0.80f,
-            };
-            if (_directive.Kind == DirectiveKind.Conserve) aggSpeed *= 0.9f;
-            centreBlend = Mathf.Clamp01(centreBlend - risk * 0.15f);
+            var mod = (DirectiveMap != null ? DirectiveMap : StrategyDirectiveMap.Default)
+                      .Resolve(_directive);
+            float aggSpeed = mod.SpeedScale;
+            float centreBlend = mod.CentreBlend;
             // -----------------------------------------------------------------
 
             float targetSpeed = Mathf.Lerp(maxSpeed * 0.40f, maxSpeed * 0.10f,
                                            Mathf.Clamp01(turnAheadDeg / 45f)) * aggSpeed;
-            float brakeMargin = Mathf.Lerp(0.3f, 2.2f, agg);   // brake later when aggressive
+            float brakeMargin = mod.BrakeMargin;   // brake later when aggressive
 
             if (speed < targetSpeed - 0.5f) { a[1] = 1f; a[2] = 0f; }
             else if (speed > targetSpeed + brakeMargin) { a[1] = 0f; a[2] = Mathf.Clamp01((speed - targetSpeed) / 3f); }

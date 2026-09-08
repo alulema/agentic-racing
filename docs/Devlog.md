@@ -2062,3 +2062,82 @@ la Fase 6.3. La población vive en `RaceDirective.Population`; se reproduce con
 **Siguiente: Fase 4 — la capa agentic (el estratega LLM).** Es el punto del demo
 (CLAUDE.md §12, §6). El piloto (heurístico + canales de directiva) y su población ya son
 la superficie de escritura que el estratega necesita.
+
+### Fase 4 (parte 1/2): servidor + web + capa C# del estratega (2026-09-08)
+
+Acordado con el dueno: hacer primero lo verificable sin Unity (servidor end-to-end,
+overlay web, capa C# del estratega) y dejar la **escena de carrera multi-auto**
+(parrilla, colisiones, clasificacion/gaps/tiempos en vivo, fuente de la telemetria
+§6.3) como paso 2, porque necesita validarse en el Editor. Esa escena es en rigor el
+cuerpo de la Fase 3 que el Camino A / Fase 3 Lite no llego a construir.
+
+**Servidor (`server/`, commit `8cbb0f5`) - hecho y probado, 10 tests verdes.**
+- `schemas.py`: `StrategyRequest` = `context` (prefijo estable §6.7: perfil de piloto +
+  mapa de curvas + vueltas) + `telemetry` (parte variable §6.3). `StrategyResponse` con
+  niveles discretos (§6.4). `StrategyEnvelope`: siempre HTTP 200, `status` `ok|fallback`,
+  `reason` explica el fallback - un solo camino para el cliente.
+- `strategy.py`: `build_messages` (system message byte-identico por auto -> reuso de
+  KV-cache). `call_ollama` = un turno, `format` = JSON Schema, `num_predict` 150,
+  `keep_alive` 25m. `parse_response` descarta la respuesta entera si algo no valida
+  (§6.8). `clamp_radio` a 15 palabras server-side.
+- `guardrails.py` (§7): compuerta de concurrencia global (semaforo 1 -> `busy`),
+  cortacircuitos (p95 > 20s o racha de 3 fallos -> `offline` 60s sin tocar Ollama, no
+  error), rate limit por IP (token bucket burst 12 / 1 s). Contadores para `/api/health`.
+- `main.py`: async con `httpx.AsyncClient` + `lifespan`. `/api/health` (modo LLM, p95,
+  rejected, failed, inflight, `ollama_reachable`). `/api/ping` para el heartbeat.
+- Probado con `curl` contra Ollama caido: fallback correcto; tras 3 fallos el
+  cortacircuitos abre (`mode: offline`, `calls` deja de subir).
+
+**Web (`web/`, commit `1e90376`) - hecho; render en browser sin capturar.**
+- Overlay 100% DOM sobre el canvas, solo `var(--color-*)` + fallback `:root`.
+- `app.js`: carga Unity (rutas relativas), router de `unity:message`, heartbeat a
+  `/api/ping` cada 60s mientras hay carrera activa (§2.2), poll de `/api/health` cada 5s
+  -> chip online/offline/down con p95 y % descartadas.
+- `overlay.js`: HUD de vuelta/clasificacion arriba, feed 'Team radio' abajo-derecha
+  (ultimas 6). Marca las llamadas fallback sin ocultarlas (§6.2). Protocolo Unity->DOM
+  (`race:start`/`race:tick`/`radio:msg`/`race:end`) documentado en el archivo.
+- `mock.js` (`?mock=1`): sintetiza una carrera de 6 autos y llama al `/api/strategy` real
+  - revisa el overlay sin build de Unity y prueba el proxy end-to-end.
+- El Chrome de automatizacion no pudo abrir `localhost` (bloqueo de red del entorno;
+  `curl` da 200). PENDIENTE: abrir `/?mock=1` a mano y confirmar el render.
+
+**Capa C# del estratega (`Assets/Scripts/Strategy/` + `Vehicle/StrategyDirectiveMap.cs`)
+- escrita; COMPILA (verificado con el `csc` de Unity 6000.3.22f1 contra los modulos de
+engine + ML-Agents + InferenceEngine, 28 archivos, 0 errores). Falta probar en el Editor.**
+- `StrategyDirectiveMap.cs` (en asmdef Vehicle): el UNICO mapeo directiva->controlador
+  (§6.5), ahora un `ScriptableObject` con constantes serializadas (calibrables en Fase 4).
+  `RaceAgent.Heuristic` deja el bloque de numeros inline y llama a `Resolve(_directive)`.
+  **Los valores por defecto son identicos a los de antes** -> la linea base de Fase 3
+  Lite (P1..P6) no cambia. `ToDirective(kind, aggLevel, riskLevel)` convierte la salida
+  discreta del LLM al `RaceDirective` que el piloto ya consume. `.Default` = instancia en
+  codigo para las arenas de train/eval.
+- `RaceStrategist.cs`: un componente por auto (independiente, sin cerebro central).
+  `Notify(evt, snapshot)` con cooldown ~12s + coalescing por relevancia (§6.6). Llama a
+  `/api/strategy` en una corrutina con `UnityWebRequest` - la carrera nunca espera.
+  Valida el sobre (§6.8): cualquier problema -> conserva la directiva vigente + nota.
+  Emite la linea de radio al overlay via `JsBridge`. `UseLlm=false` -> corre siempre con
+  `HeuristicFallback` (grupo de control §6.3). Backstop cliente §7.5: max 2 llamadas en
+  vuelo en toda la grilla. Evento `DecisionMade(StrategyRecord)` con el registro completo
+  para Fase 6.1.
+- `HeuristicFallback.cs`: la estrategia heuristica fija (fallback §7 Y control §6.3).
+- `StrategyModels.cs` (DTOs para `JsonUtility.FromJson`), `JsonBuilder.cs` (escritor JSON
+  minimo - `JsonUtility` no emite `null`), `RaceTelemetry.cs` (structs `SelfSnapshot`/
+  `RivalSnapshot`/`TelemetrySnapshot` que la escena llenara), `StrategyApi.cs` (endpoint:
+  WebGL -> origen de la pagina; Editor -> `localhost:8080` / `AGENTIC_API_BASE`),
+  `PilotProfiles.cs` (perfil de una linea por miembro, para el prefijo §6.2/§6.7).
+- asmdefs nuevos: `AgenticRacing.Interop` (Interop pasa a asmdef propio para que Strategy
+  lo referencie) y `AgenticRacing.Strategy` (refs: Track, Vehicle, Interop).
+
+**Pendiente para el humano (Editor):**
+1. Abrir en Unity 6000.3.22f1 -> genera los `.meta` de `Strategy/`, del asmdef de Interop
+   y de `StrategyDirectiveMap.cs`, y **commitearlos** (sin ellos GameCI genera GUIDs no
+   deterministas).
+2. Confirmar que compila en el Editor y que los tests EditMode siguen verdes.
+3. Abrir `web/index.html?mock=1` contra `docker compose up` y confirmar overlay + radio +
+   chip de estado del LLM.
+4. Paso 2/2 de Fase 4: la escena de carrera multi-auto que emite `race:*` y construye los
+   `TelemetrySnapshot` - 6 autos de `RaceDirective.Population` en parrilla, colisiones,
+   `RaceDirector` que calcula clasificacion/gaps/tiempos y llama a cada `RaceStrategist`,
+   3 con `UseLlm=true` y 3 con `false` (campo mixto §6.3). Ademas: en la carrera real el
+   episodio es UNA carrera larga -> relajar las terminaciones `stall`/`stuck`/`offTrack`
+   del `RaceAgent` para el modo demo.
