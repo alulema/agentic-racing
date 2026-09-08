@@ -1,0 +1,171 @@
+/* Overlay for the agentic-racing demo. Everything visible sits in the DOM on
+ * top of the Unity <canvas> so it can use the site theme's CSS variables
+ * (CLAUDE.md §2.2). Unity draws only the track and the cars.
+ *
+ * Colours/typography come from https://alexisalulema.com/demo-theme.css via
+ * var(--color-*) / var(--font-*) / var(--radius); index.html defines a minimal
+ * fallback :root so the demo is legible if that stylesheet fails to load.
+ */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+#stage {
+  position: relative;
+  width: min(1100px, 100vw);
+  margin: 0 auto;
+  padding: 1rem 0 2rem;
+}
+
+#unity-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  background: #000;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+#unity-canvas { width: 100%; height: 100%; display: block; }
+
+#load-bar {
+  position: absolute;
+  left: 0; bottom: 0;
+  height: 3px;
+  width: 0%;
+  background: var(--color-accent);
+  transition: width 0.2s ease;
+}
+
+/* --- top HUD: lap + classification ------------------------------------- */
+
+#hud {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  right: 0.75rem;
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.hud-card {
+  background: color-mix(in srgb, var(--color-bg-card) 88%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  backdrop-filter: blur(4px);
+}
+
+#lap-card { font-size: 1rem; font-weight: 700; letter-spacing: 0.02em; }
+
+#standings { min-width: 260px; }
+#standings table { border-collapse: collapse; width: 100%; }
+#standings td { padding: 0.1rem 0.35rem; white-space: nowrap; }
+#standings .pos { color: var(--color-text-dim, #9aa); text-align: right; width: 1.4em; }
+#standings .car { font-weight: 600; }
+#standings .gap { text-align: right; color: var(--color-text-dim, #9aa); }
+#standings .dir { text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.04em; }
+#standings tr.me .car { color: var(--color-accent); }
+
+/* --- team radio feed -------------------------------------------------- */
+
+#radio {
+  position: absolute;
+  right: 0.75rem;
+  bottom: 0.75rem;
+  width: min(360px, 70%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  pointer-events: none;
+}
+
+#radio h2 {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--color-text-dim, #9aa);
+}
+
+.radio-msg {
+  background: color-mix(in srgb, var(--color-bg-card) 92%, transparent);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--car-color, var(--color-accent));
+  border-radius: var(--radius);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  animation: radio-in 0.25s ease;
+}
+@keyframes radio-in { from { opacity: 0; transform: translateY(6px); } }
+
+.radio-msg .head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--color-text-dim, #9aa);
+  margin-bottom: 0.15rem;
+}
+.radio-msg .who { font-weight: 700; color: var(--car-color, var(--color-text)); }
+.radio-msg .tag {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.05em 0.4em;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+}
+.radio-msg .tag.fallback { color: #e0a34a; border-color: #e0a34a55; }
+.radio-msg .tag.ok { color: var(--color-accent); border-color: color-mix(in srgb, var(--color-accent) 40%, transparent); }
+.radio-msg .body { color: var(--color-text); }
+.radio-msg .meta {
+  margin-top: 0.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--color-text-dim, #9aa);
+}
+
+/* --- LLM status chip ------------------------------------------------- */
+
+#llm-status {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  padding: 0.2em 0.55em;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg-card) 88%, transparent);
+  color: var(--color-text-dim, #9aa);
+}
+#llm-status.online::before { content: "● "; color: var(--color-accent); }
+#llm-status.offline::before { content: "● "; color: #e0a34a; }
+#llm-status.down::before { content: "● "; color: #d05a5a; }
+
+#waiting {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--color-text-dim, #9aa);
+}
+#waiting.hidden { display: none; }
