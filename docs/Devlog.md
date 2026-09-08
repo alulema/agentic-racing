@@ -1924,3 +1924,41 @@ circuito limpio y simple, la física y la heurística funcionan.
 Nota sobre el RL: con el circuito fijo, un PPO limpio probablemente SÍ aprenda a dar
 vueltas (el entorno ahora es tratable). Queda como opción para después de tener el piloto
 heurístico+directivas funcionando y la Fase 4 encaminada — no bloquea.
+
+### Camino A completo: piloto heurístico + directivas, Fase 2 cerrada (2026-09-08)
+
+`eval -heuristic` sobre el óvalo fijo, forzando la directiva:
+
+| directiva | fin | m/s | throttle | brake | vuelta |
+|---|---|---|---|---|---|
+| Conserve, agg 0.15 | lap 100% | 17.6 | 0.38 | 0.07 | 112 s |
+| random | lap 100% | 20.1 | 0.45 | 0.10 | 100 s |
+| Attack, agg 0.85 | lap 100% | 24.9 | 0.63 | 0.18 | 79 s |
+
+**Los 9 autos completan vuelta entera en los tres casos.** La directiva da ~40% de spread
+en tiempo de vuelta cambiando solo `Aggression`/`Kind`. El estratega (Fase 4) tiene una
+superficie de escritura real y observable.
+
+- [x] Paso 1 — circuito fijo (`FixedRoundedRect`).
+- [x] Paso 2 — heurística con dirección suavizada, da vueltas limpias.
+- [x] Paso 3 — canales de directiva cableados (`Aggression`/`RiskTolerance`/`Kind` →
+  pace, margen de frenada, sesgo de línea). `RaceAgent.ForcedDirective` + flags de eval.
+- [ ] Paso 4 — documentar el intento RL race01-08 para el post técnico.
+- [ ] Paso 5 — limpiar los `Debug.Log` de diagnóstico (`[Heur]`, volcado de trayectoria,
+  one-shots `[RaceAgent] ...`).
+
+**Fase 2 (piloto) — cerrada por camino A.** El piloto es `RaceAgent.Heuristic()` en
+`HeuristicOnly`; no necesita `.onnx` ni Sentis en runtime → simplifica el build WebGL
+(el piloto es C# puro en el cliente). El RL queda documentado como intento; con el
+circuito fijo un PPO limpio probablemente aprenda, pero no bloquea y se puede retomar
+después.
+
+**Población de pilotos (Fase 3)**: 6 `RaceDirective` base fijas (ej. combinaciones de
+`Kind` × `Aggression`) en vez de snapshots RL. Emparejadas en ritmo por diseño (mismo
+controlador, distintos parámetros) — más limpio que elegir checkpoints (§5, §11). Falta:
+correrlas entre sí en el óvalo y registrar tiempos de vuelta medios (la línea base de §5).
+
+**Pendiente de diseño para Fase 3/4**: en la carrera real el episodio es UNA carrera
+larga (varias vueltas), no muchos episodios cortos — hay que desactivar/relajar las
+terminaciones `stall`/`stuck`/`offTrack` para el modo demo (que un roce no "reinicie" el
+auto a mitad de carrera; en su lugar, respawn suave en la pista o penalización de tiempo).
