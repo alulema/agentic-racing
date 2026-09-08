@@ -82,7 +82,7 @@ namespace AgenticRacing.Agents
             // met and the request pipeline wires up cleanly.
             AddBehaviour(body);
             var agent = body.AddComponent<RaceAgent>();   // its Initialize() reads the arena + brain
-            agent.MaxStep = 4000;                          // ~80 s of sim = episode timeout
+            agent.MaxStep = 6000;                          // ~120 s: a full lap of the fixed circuit is ~95 s at pace
             AddDecisionRequester(body);
 
             body.SetActive(true);                          // single, clean InitializeSensors()

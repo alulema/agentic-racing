@@ -1891,3 +1891,36 @@ cuyo comportamiento **cambie según los canales de directiva**. Plan para la pr�
 
 Ramas/artefactos: todo commiteado hasta `e2dae1c` en `fase-2-rl-agente`. `results/race01..08`
 en disco (gitignored). Los `.onnx` de race08 en `results/race08/`.
+
+### BREAKTHROUGH: circuito fijo → la heurística da vueltas limpias (2026-09-08)
+
+`eval -heuristic` sobre el óvalo redondeado fijo (`TrackParams.FixedRoundedRect`, ~2 km,
+4 curvas de r=120 m):
+
+    episodes=9  meanEpisodeSteps=4000 (~80s)  meanLapProgress=86% of a lap
+    end reasons: maxStep=100%
+    meanForwardSpeed=21.4 m/s  meanThrottle=0.43  meanBrake=0.07  meanAbsSteer=0.04
+
+**Los 9 autos corrieron los 80 s completos sin salirse, sin trabarse, sin pararse.** Crucero
+a 21 m/s, control modulado. La "parálisis" (`spd 18→0`, crawl a 3-13 m/s) que dominó
+race01-08 y toda la caza de esta sesión **era de las pistas procedurales** — segmentos
+degenerados del centerline, geometría de muros mal formada en curva, y curvas que ni la
+heurística ni el RL manejaban. **No era un bug de fondo del `CarController`.** En un
+circuito limpio y simple, la física y la heurística funcionan.
+
+`MaxStep` 4000 → 6000 (una vuelta al óvalo son ~95 s a ritmo; con 80 s no cerraba).
+
+**Estado del camino A**:
+- [x] Paso 1 — circuito fijo. Hecho, funciona.
+- [x] Paso 2 — heurística con dirección suavizada. Da vueltas limpias.
+- [ ] Paso 3 — cablear los canales de directiva (`_directive.Aggression/RiskTolerance/Kind`,
+  ya en las observaciones) a la heurística: `Aggression` → `targetSpeed` / margen de
+  frenada; `directive` (attack/defend/conserve/push) → sesgo de línea; `RiskTolerance` →
+  tolerancia a proximidad (Fase 4). Con 6 juegos de parámetros distintos → población de
+  pilotos de Fase 3.
+- [ ] Paso 4 — documentar el intento RL (race01-08) para el post técnico.
+- [ ] Paso 5 — limpiar los Debug.Log de diagnóstico.
+
+Nota sobre el RL: con el circuito fijo, un PPO limpio probablemente SÍ aprenda a dar
+vueltas (el entorno ahora es tratable). Queda como opción para después de tener el piloto
+heurístico+directivas funcionando y la Fase 4 encaminada — no bloquea.
