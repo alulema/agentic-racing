@@ -1852,3 +1852,42 @@ proyecto: el demo es sobre el loop agentic piloto<->estratega, no un sim de carr
 
 **Siguiente**: rebuild eval → `eval.exe -heuristic`. Si la heurística da vueltas → señal
 real, reentrenar y AVANZAR a Fase 3/4 (el estratega, que es el punto). Si no → descope.
+
+### race08 = mismo plateau → decisión: descope del piloto RL (camino A) (2026-09-07, cierre de sesión)
+
+`race08` (10M steps, PPO limpio, con grip que redirige + pistas suaves + recompensa
+velocidad-objetivo): `Cumulative Reward` ~6 plano desde 2.7M, `Episode Length` ~123,
+`end reasons` **`offTrack` 91% / `lap` 4% / `stall` 5%**, `mean lapArc` ~258 m (~13% de
+vuelta). Los tres cambios movieron el número apenas (`lap` 2%→4%). **Sin breakthrough.**
+
+**Balance de la sesión**: ~22 iteraciones sobre Fase 2 (piloto RL) — recompensa (7
+variantes), heurística (8), radio de curva, muros (3 versiones: malla cero / cajas /
+sólido extruido), spawn, grip (cap y luego redirigir), pistas suaves. El número de vuelta
+no se movió de ~10-13% en ninguna. El pipeline de entrenamiento y el eval harness quedaron
+sólidos; el modelo de física mejoró (grip ya no frena al doblar); pero **PPO no converge a
+dar vueltas** en este entorno con el esfuerzo invertido.
+
+**Decisión (dueño del proyecto)**: camino A. El demo es sobre el loop piloto↔estratega
+(CLAUDE.md §12), y para eso no hace falta un piloto RL excelente — hace falta un piloto
+cuyo comportamiento **cambie según los canales de directiva**. Plan para la próxima sesión:
+
+1. **Pista fija simple** para Fase 2+: un `TrackParams` (o un generador dedicado) que
+   produzca un óvalo / rectángulo redondeado con ~4 curvas numeradas navegables. Mantiene
+   la numeración de curvas y la memoria lap-over-lap que necesita el estratega (§2.1). La
+   generación procedural desde seed queda como feature opcional / Fase 1, no bloqueante.
+2. **Piloto = heurística scripted** (`RaceAgent.Heuristic`, ya escrita) con un ajuste de
+   suavizado de dirección (re-agregar el low-pass `_steerSmooth`, gain `/11` → `/16`) para
+   que no oscile. Verificar que da vueltas completas sobre la pista fija con `eval -heuristic`.
+3. **Cablear los canales de directiva** (`_directive.Aggression` / `RiskTolerance` /
+   `Kind`, ya en las observaciones desde §6.1) a la heurística: modular `targetSpeed`
+   (agresión → frena más tarde / entra más rápido), margen lateral / línea (`directive`),
+   tolerancia a proximidad (`risk`). Eso da la superficie de escritura del estratega (§6.5)
+   y, con 6 semillas de parámetros distintas, la población de pilotos de Fase 3.
+4. El intento de RL (race01-08) queda documentado acá y para el post técnico (CLAUDE.md
+   §6.2 valora mostrar lo que no funcionó). El `.onnx` de race08 se puede conservar en
+   `models/` como referencia del intento, no como piloto de producción.
+5. Limpiar los `Debug.Log` de diagnóstico de `RaceAgent.cs` (`[Heur]`, volcado de
+   trayectoria, `[RaceAgent] ...` one-shots) una vez estabilizado.
+
+Ramas/artefactos: todo commiteado hasta `e2dae1c` en `fase-2-rl-agente`. `results/race01..08`
+en disco (gitignored). Los `.onnx` de race08 en `results/race08/`.
