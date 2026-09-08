@@ -2141,3 +2141,85 @@ engine + ML-Agents + InferenceEngine, 28 archivos, 0 errores). Falta probar en e
    3 con `UseLlm=true` y 3 con `false` (campo mixto §6.3). Ademas: en la carrera real el
    episodio es UNA carrera larga -> relajar las terminaciones `stall`/`stuck`/`offTrack`
    del `RaceAgent` para el modo demo.
+
+### Fase 4 (parte 2/2) paso 1: RaceDirector + telemetria §6.3 (2026-09-08, sesion Ubuntu)
+
+Retomada en la particion **Ubuntu** de la NUC (Docker + Editor Linux `6000.3.22f1`
+instalados: cubre todo lo que queda de Fase 4/5; solo se vuelve a Windows si se
+retoma RL real con `mlagents-learn`). El `?mock=1` contra `docker compose up`
+quedo confirmado por el dueno (pendiente 3 de la parte 1/2 -> hecho).
+
+**Seam en `RaceAgent` para la escena de carrera (`Agents/RaceAgent.cs`):**
+- `internal TrackData ExternalTrack` — el `RaceDirector` inyecta UN circuito
+  compartido para toda la grilla; `Initialize()` lo usa y solo cae al
+  `GetComponentInParent<TrainingArena>()` si es null (train/eval intactos).
+- `internal bool RaceMode` — corre como piloto puro para UNA carrera larga:
+  `OnEpisodeBegin` no hace respawn aleatorio (el auto se queda en el slot de
+  parrilla), no toca recompensa ni el chequeo de timeout de `MaxStep`;
+  `OnActionReceived` mapea controles + `_progress.Update` y **retorna antes** de
+  cualquier `AddReward`/`EndEpisode`. `Heuristic()` (el piloto Camino A) intacto.
+- `internal void SetRaceDirective(RaceDirective)` — el estratega empuja su
+  directiva vigente cada tick para que el piloto Y los canales de directiva de
+  su vector de observaciones (§6.1) sigan al muro de boxes en vivo.
+
+**`RaceDirector.cs` nuevo (`Assets/Scripts/Agents/`, asmdef `AgenticRacing.Agents`
+ahora referencia `AgenticRacing.Strategy` + `AgenticRacing.Interop` — sin ciclo:
+Strategy no referencia Agents).** MonoBehaviour que:
+- `StartRace()` (auto en `Awake` salvo que un bootstrap lo apague): genera el
+  ovalo fijo (`TrackGenerator.Generate`), construye el mapa de curvas numeradas
+  (`CornerInfo[]` desde `TrackData.Corners`, severidad por `MinRadius`), levanta
+  los muros (`TrackEdgeColliders.Build`) y arma la parrilla de 6 autos de
+  `RaceDirective.Population` (2 columnas, filas hacia atras de la meta).
+- Cada auto: cold-build ML-Agents (BehaviorParameters HeuristicOnly ->
+  `RaceAgent.ObsSize` = 15, sin ray sensor) + `RaceAgent` en `RaceMode` con
+  `ExternalTrack`/`InstanceDirective`/`MaxStep=0` + `DecisionRequester`(5) +
+  `RaceStrategist` con `UseLlm = slot < llmCars` (campo mixto §6.3, 3 y 3),
+  `Context` (perfil de piloto §6.2/§6.7 + mapa de curvas + vueltas) y `Map`.
+  Pose de parrilla ANTES de activar (para que el reset de `_progress` de
+  `OnEpisodeBegin` en RaceMode vea el slot real, no el origen) y `PlaceAt`
+  despues.
+- `FixedUpdate`: `TrackProgress` por auto, EMA de velocidad, deteccion de cruce
+  de meta por wrap de `Distance01` (con histeresis `CrossArmed`), `Crossings` ->
+  `LapsCompleted`, `TotalArc = Crossings*len + arc` (monotonico), clasificacion
+  por `TotalArc`, gaps en segundos (`ΔTotalArc / max(8, EMA velocidad)`),
+  tiempos de vuelta (best/last), y el mirror de `CurrentDirective` -> piloto.
+- Dispara `RaceStrategist.Notify` por evento (§6.6): `LapCompleted` / `FinalLap`
+  (al empezar la ultima vuelta, una vez) en el cruce de meta; `PositionChange`
+  al cambiar de posicion; `RivalInRange` cuando el gap al de adelante < 1.5 s
+  **sostenido** 2 s (con rearmado por histeresis, no un cruce momentaneo);
+  `Incident` via `ReportIncident(slotA, slotB)` (hook publico, lo llamara la
+  deteccion de colisiones del paso 2). El cooldown/coalescing por auto ya vive
+  dentro de `RaceStrategist`.
+- `BuildSnapshot(car, evt)` arma el `TelemetrySnapshot` §6.3 completo:
+  `SelfSnapshot` (pos, last/best lap, gap_ahead/gap_behind con centinela -1 =
+  lider/ultimo, directiva vigente, incidentes) + `RivalSnapshot[]` de los otros
+  5 (gap firmado <0 = adelante, `trend` closing/stable/dropping por delta del
+  gap). Las notas lap-over-lap las agrega el director via
+  `RaceStrategist.AddNote` (que es lo que va en el prefijo `_notes` enviado).
+- Emite `race:start` / `race:tick` (cada 0.2 s) / `race:end` al overlay via
+  `JsBridge` con los nombres de campo exactos que consumen `web/app.js` +
+  `web/overlay.js` (`type`, `classification:[{pos,id,name,gap,lastLap,directive}]`,
+  `meId`, etc.). El `radio:msg` lo sigue emitiendo `RaceStrategist`.
+
+**Typecheck (sin Editor):** `csc` de Roslyn de Unity 6000.3.22f1 (`-nostdlib`,
+`-langversion:9.0`) sobre las 5 asmdef (Track, Vehicle, Interop, Strategy,
+Agents) aplanadas + engine + ML-Agents + InferenceEngine -> **0 errores**. No
+verifica el grafo de referencias entre asmdef (eso es el Editor).
+
+**`.meta`:** creado `Agents/RaceDirector.cs.meta` a mano con GUID estable (mismo
+formato minimo que los `.meta` que dejo la sesion de Windows). El editar
+`RaceAgent.cs` / el `.asmdef` no cambia sus `.meta`.
+
+**Pendiente:**
+- Paso 2 — escena `Race.unity` + bootstrap; colisiones auto-auto que llamen a
+  `RaceDirector.ReportIncident`; rotacion de parrilla y de que slots llevan LLM
+  (§6.3). El `RaceDirector` ya no necesita `TrainingArena`.
+- Paso 3 — politica de respawn suave / penalizacion de tiempo para un auto que
+  se sale o se enreda (hoy `RaceMode` simplemente no termina nunca; el auto
+  sigue con la recuperacion de muro de `Heuristic()`).
+- Paso 4 — abrir `web/index.html` (sin `?mock=1`) contra la escena real y
+  confirmar el flujo `race:*` + `radio:msg` completo.
+- Paso 5 — compilar en el Editor Linux (asmdef graph) + tests EditMode verdes;
+  correr la escena. Generar/commitear cualquier `.meta` que falte.
+- Sigue pendiente de la parte 1/2: `.meta` de `Strategy/` etc. los genera el
+  Editor al abrir (item 1 de la lista anterior).

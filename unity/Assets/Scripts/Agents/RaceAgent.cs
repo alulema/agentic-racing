@@ -91,19 +91,50 @@ namespace AgenticRacing.Agents
             // (System.Random's default seed is the shared tick count).
             _rng = new System.Random(GetInstanceID());
 
-            _arena = GetComponentInParent<TrainingArena>();
-            if (_arena == null || _arena.Track == null)
+            // Fase 4 race scene: RaceDirector injects one shared circuit for the
+            // whole grid (ExternalTrack) instead of a per-agent TrainingArena.
+            _track = ExternalTrack;
+            if (_track == null)
             {
-                Debug.LogError("[RaceAgent] no TrainingArena with a built track in the parents.");
-                return;
+                _arena = GetComponentInParent<TrainingArena>();
+                if (_arena == null || _arena.Track == null)
+                {
+                    Debug.LogError("[RaceAgent] no track: needs a TrainingArena parent " +
+                                   "(training/eval) or a RaceDirector-supplied ExternalTrack (race).");
+                    return;
+                }
+                _track = _arena.Track;
             }
-            _track = _arena.Track;
             _halfWidth = _track.Width * 0.5f;
             _progress = new TrackProgress(_track);
         }
 
         public override void OnEpisodeBegin()
         {
+            if (RaceMode)
+            {
+                // One long episode = the whole race. No random respawn (the car
+                // stays on the grid slot RaceDirector placed it on), no reward or
+                // MaxStep-timeout bookkeeping. The soft-respawn / time-penalty
+                // policy for a car that goes off or tangles is RaceDirector's job
+                // (Fase 4 paso 3). Fires once, on activation.
+                if (_track == null) return;
+                _directive = InstanceDirective ?? RaceDirective.Neutral;
+                _progress.Reset(_rb.position);
+                _lapArc = 0f;
+                _stuckTimer = 0f;
+                _wrongWayTimer = 0f;
+                _stuckArmed = false;
+                _stallArc = 0f;
+                _stallTimer = 0f;
+                _wallJamTimer = 0f;
+                _escapeUntil = 0f;
+                _steerSmooth = 0f;
+                _episodeSteps = 0;
+                _endReported = false;
+                return;
+            }
+
             // If the previous episode ended without one of our explicit
             // EndEpisode() paths and ran ~the full budget, it timed out on
             // MaxStep — report it. (Guard on step count so a mid-episode policy
@@ -240,6 +271,15 @@ namespace AgenticRacing.Agents
             _car.Steer = Mathf.Clamp(a[0], -1f, 1f);
             _car.Throttle = Mathf.Clamp(a[1], -1f, 1f);
             _car.Brake = Mathf.Clamp01(a[2]);
+
+            if (RaceMode)
+            {
+                // Pilot only: feed the controls and keep _progress current for
+                // Heuristic() and CollectObservations. Lap counting, gaps and any
+                // respawn policy are RaceDirector's; nothing here ends the race.
+                _progress.Update(_rb.position);
+                return;
+            }
 
             _progress.Update(_rb.position);
             float fwdMetres = _progress.ConsumeForwardDelta();
@@ -378,6 +418,26 @@ namespace AgenticRacing.Agents
         /// training/eval arenas (they use <see cref="StrategyDirectiveMap.Default"/>);
         /// the Fase 4 race scene assigns a shared calibrated asset.</summary>
         internal StrategyDirectiveMap DirectiveMap;
+
+        /// <summary>Fase 4 race scene: the one shared circuit for the whole grid,
+        /// injected by RaceDirector before the agent activates (a race has a
+        /// single track, not a per-agent TrainingArena). Null in training/eval.</summary>
+        internal TrackData ExternalTrack;
+
+        /// <summary>Fase 4 race scene: run as a pure pilot for one long race —
+        /// no random per-episode respawn, no reward shaping, no stall/stuck/
+        /// off-track/lap <see cref="Agent.EndEpisode"/>. Set together with
+        /// <see cref="ExternalTrack"/> and <see cref="InstanceDirective"/>.</summary>
+        internal bool RaceMode;
+
+        /// <summary>Fase 4 race scene: the strategist pushes its live directive
+        /// here every tick so the pilot's driving — and the directive channels in
+        /// its observation vector (§6.1) — track the pit wall. No-op outside race
+        /// mode; training/eval set the directive once per episode instead.</summary>
+        internal void SetRaceDirective(RaceDirective directive)
+        {
+            if (RaceMode) _directive = directive;
+        }
 
         private void ReportEpisodeEnd(string reason)
         {
