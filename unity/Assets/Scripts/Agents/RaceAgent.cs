@@ -139,7 +139,7 @@ namespace AgenticRacing.Agents
 
             if (_track == null) return;
 
-            _directive = RaceDirective.RandomEpisode(_rng);
+            _directive = ForcedDirective ?? RaceDirective.RandomEpisode(_rng);
 
             var center = _track.Centerline;
             int n = center.Count;
@@ -450,6 +450,11 @@ namespace AgenticRacing.Agents
         /// line, aligned, at speed — no training-time heading/lateral noise.</summary>
         internal static bool CleanSpawn;
 
+        /// <summary>Eval harness override: when set, every episode uses this
+        /// directive instead of a random one, so a single stance can be inspected
+        /// (`eval.exe -directive attack` etc.).</summary>
+        internal static RaceDirective? ForcedDirective;
+
         private void EndDiag(string reason, float value)
         {
             _diagCounted = true;
@@ -578,12 +583,33 @@ namespace AgenticRacing.Agents
                 e0.y = e1.y = 0f;
                 turnAheadDeg = Mathf.Max(turnAheadDeg, Mathf.Abs(Vector3.SignedAngle(e0, e1, Vector3.up)));
             }
+            // --- Directive modulation (§6.5) -----------------------------------
+            // The strategist's only write surface. Aggression sets pace / braking
+            // margin; Kind sets the line bias; RiskTolerance trims how close to
+            // the edge the car will run. These are the same channels the policy
+            // sees in its observations (§6.1); the heuristic reads them directly.
+            float agg = Mathf.Clamp01(_directive.Aggression);
+            float risk = Mathf.Clamp01(_directive.RiskTolerance);
+            float aggSpeed = Mathf.Lerp(0.86f, 1.16f, agg);
+            float centreBlend = _directive.Kind switch
+            {
+                DirectiveKind.Attack => 0.45f,
+                DirectiveKind.Push => 0.40f,
+                DirectiveKind.Defend => 0.78f,
+                DirectiveKind.Conserve => 0.92f,
+                _ => 0.80f,
+            };
+            if (_directive.Kind == DirectiveKind.Conserve) aggSpeed *= 0.9f;
+            centreBlend = Mathf.Clamp01(centreBlend - risk * 0.15f);
+            // -----------------------------------------------------------------
+
             float targetSpeed = Mathf.Lerp(maxSpeed * 0.40f, maxSpeed * 0.10f,
-                                           Mathf.Clamp01(turnAheadDeg / 45f));
+                                           Mathf.Clamp01(turnAheadDeg / 45f)) * aggSpeed;
+            float brakeMargin = Mathf.Lerp(0.3f, 2.2f, agg);   // brake later when aggressive
 
             if (speed < targetSpeed - 0.5f) { a[1] = 1f; a[2] = 0f; }
-            else if (speed > targetSpeed + 0.5f) { a[1] = 0f; a[2] = Mathf.Clamp01((speed - targetSpeed) / 3f); }
-            else { a[1] = 0.6f; a[2] = 0f; }
+            else if (speed > targetSpeed + brakeMargin) { a[1] = 0f; a[2] = Mathf.Clamp01((speed - targetSpeed) / 3f); }
+            else { a[1] = Mathf.Lerp(0.45f, 0.9f, agg); a[2] = 0f; }   // more throttle out of the corner
 
             // Pure-pursuit steering, low-pass filtered. Earlier: gain /11, no
             // filter, short lookahead -> the steer command slammed +-1 and the
@@ -591,10 +617,7 @@ namespace AgenticRacing.Agents
             // gain, and a first-order filter on the command.
             float lookaheadM = Mathf.Clamp(12f + speed * 0.9f, 12f, 36f);
             int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
-            // Aim mostly at the centreline (0.8 toward centre): the racing line
-            // hugs the walls, and "lap without leaving the track" (Fase 2) wants
-            // margin, not the fast line. Racing-line optimisation is Fase 3+.
-            Vector3 aim = Vector3.Lerp(line[(s + laSteps) % n], center[(s + laSteps) % n], 0.8f);
+            Vector3 aim = Vector3.Lerp(line[(s + laSteps) % n], center[(s + laSteps) % n], centreBlend);
             Vector3 toTarget = aim - _rb.position;
             toTarget.y = 0f;
             float headingErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);

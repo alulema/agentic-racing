@@ -48,6 +48,10 @@ namespace AgenticRacing.Agents
             _heuristic = _record || System.Array.IndexOf(args, "-heuristic") >= 0;
             if (_record && evalSeconds < 300f) evalSeconds = 300f;
 
+            // `-directive <attack|defend|conserve|push>` and `-aggression <lo|mid|hi>`
+            // force every agent to one strategist stance, to inspect its effect.
+            RaceAgent.ForcedDirective = ParseForcedDirective(args);
+
             ModelAsset model = null;
             if (!_heuristic)
             {
@@ -110,6 +114,27 @@ namespace AgenticRacing.Agents
         }
 
         private void OnDestroy() => RaceAgent.AnyEpisodeEnded -= OnEpisodeEnded;
+
+        private static AgenticRacing.Vehicle.RaceDirective? ParseForcedDirective(string[] args)
+        {
+            string kindArg = ArgValue(args, "-directive");
+            string aggArg = ArgValue(args, "-aggression");
+            if (kindArg == null && aggArg == null) return null;
+
+            var d = AgenticRacing.Vehicle.RaceDirective.Neutral;
+            if (kindArg != null && System.Enum.TryParse(kindArg, true, out AgenticRacing.Vehicle.DirectiveKind k))
+                d.Kind = k;
+            d.Aggression = aggArg switch { "lo" => 0.15f, "hi" => 0.85f, _ => 0.5f };
+            d.RiskTolerance = d.Aggression;
+            Debug.Log($"[Eval] forced directive: Kind={d.Kind} Aggression={d.Aggression:F2}");
+            return d;
+        }
+
+        private static string ArgValue(string[] args, string flag)
+        {
+            int i = System.Array.IndexOf(args, flag);
+            return (i >= 0 && i + 1 < args.Length) ? args[i + 1] : null;
+        }
 
         private void OnEpisodeEnded(string reason, int steps, float lapArc)
         {
