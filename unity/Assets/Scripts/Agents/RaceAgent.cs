@@ -558,7 +558,7 @@ namespace AgenticRacing.Agents
             }
             if (slow)
             {
-                a[0] = Mathf.Clamp((noseErr - carOffLeft * 2f) / 18f, -1f, 1f);
+                _steerSmooth = a[0] = Mathf.Clamp((noseErr - carOffLeft * 2f) / 18f, -1f, 1f);
                 a[1] = 1f;
                 a[2] = 0f;
                 return;
@@ -585,10 +585,11 @@ namespace AgenticRacing.Agents
             else if (speed > targetSpeed + 0.5f) { a[1] = 0f; a[2] = Mathf.Clamp01((speed - targetSpeed) / 3f); }
             else { a[1] = 0.6f; a[2] = 0f; }
 
-            // Pure-pursuit steering. Lookahead scales with speed but stays short
-            // enough to actually turn into corners; aggressive gain, no low-pass
-            // (the filter lagged corner entry and the car ran wide into the wall).
-            float lookaheadM = Mathf.Clamp(8f + speed * 0.8f, 8f, 32f);
+            // Pure-pursuit steering, low-pass filtered. Earlier: gain /11, no
+            // filter, short lookahead -> the steer command slammed +-1 and the
+            // car oscillated itself off the track. Now: longer lookahead, softer
+            // gain, and a first-order filter on the command.
+            float lookaheadM = Mathf.Clamp(12f + speed * 0.9f, 12f, 36f);
             int laSteps = Mathf.Max(1, Mathf.RoundToInt(lookaheadM / spacing));
             // Aim mostly at the centreline (0.8 toward centre): the racing line
             // hugs the walls, and "lap without leaving the track" (Fase 2) wants
@@ -597,11 +598,10 @@ namespace AgenticRacing.Agents
             Vector3 toTarget = aim - _rb.position;
             toTarget.y = 0f;
             float headingErrDeg = Vector3.SignedAngle(transform.forward, toTarget, Vector3.up);
-            // Gentle cross-track pull toward centre — a strong one (gain 3, ±25°)
-            // combined with pure-pursuit slammed to full lock and oscillated the
-            // car into a spin near spawn.
             float crossCorrDeg = Mathf.Clamp(carOffLeft * 1.4f, -13f, 13f);  // left of centre -> steer right (+)
-            _steerSmooth = a[0] = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 11f, -1f, 1f);
+            float rawSteer = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 16f, -1f, 1f);
+            _steerSmooth = Mathf.Lerp(_steerSmooth, rawSteer, 0.35f);
+            a[0] = _steerSmooth;
 
             if (_dbgHeurT <= Time.time)
             {
