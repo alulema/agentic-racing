@@ -78,21 +78,9 @@ namespace AgenticRacing.Agents
         private float _wrongWayTimer;
         private bool _stuckArmed;    // stuck check only bites once the car has actually got moving
         private float _stallArc, _stallTimer;   // progress-stall check state
-        private bool _diagCounted;   // did EndDiag already tally the current episode?
+        private bool _endReported;   // did this episode already fire AnyEpisodeEnded?
         private float _wallJamTimer, _escapeUntil, _steerSmooth;   // heuristic control state
-
-        // Death-trajectory ring buffer (diagnostics only).
-        private const int TrajLen = 20;
-        private readonly float[] _trajLat = new float[TrajLen], _trajSteer = new float[TrajLen],
-                                 _trajSpeed = new float[TrajLen], _trajBrake = new float[TrajLen],
-                                 _trajTurn = new float[TrajLen];
-        private int _trajHead = -1;
-
         private int _episodeSteps;   // steps taken in the current lap/episode
-
-        // Fase 2 bring-up diagnostics. Remove once training is stable.
-        private static bool _loggedInit, _loggedObs;
-        private static int _episodeCount, _actionCount;
 
         public override void Initialize()
         {
@@ -112,29 +100,17 @@ namespace AgenticRacing.Agents
             _track = _arena.Track;
             _halfWidth = _track.Width * 0.5f;
             _progress = new TrackProgress(_track);
-
-            if (!_loggedInit)
-            {
-                _loggedInit = true;
-                Debug.Log($"[RaceAgent] Initialize ok: car={_car != null} rb={_rb != null} " +
-                          $"centerline={_track.Centerline?.Count ?? -1} racingLine={_track.RacingLine?.Count ?? -1} " +
-                          $"width={_track.Width} maxStep={MaxStep}");
-            }
         }
 
         public override void OnEpisodeBegin()
         {
-            int ep = ++_episodeCount;
-            if (ep <= 15 || ep % 200 == 0)
-                Debug.Log($"[RaceAgent] OnEpisodeBegin #{ep}: track={_track != null} " +
-                          $"stepCount={StepCount} prevEpisodeSteps={_episodeSteps}");
             // If the previous episode ended without one of our explicit
-            // EndEpisode() paths AND ran ~the full budget, it timed out on
-            // MaxStep — count it. (Guard on step count so a mid-episode policy
+            // EndEpisode() paths and ran ~the full budget, it timed out on
+            // MaxStep — report it. (Guard on step count so a mid-episode policy
             // swap in the eval harness isn't miscounted as a timeout.)
-            if (ep > 1 && !_diagCounted && _track != null && _episodeSteps >= MaxStep - 5)
-                EndDiag("maxStep", _episodeSteps);
-            _diagCounted = false;
+            if (!_endReported && _track != null && _episodeSteps >= MaxStep - 5)
+                ReportEpisodeEnd("maxStep");
+            _endReported = false;
             _episodeSteps = 0;
 
             if (_track == null) return;
@@ -183,19 +159,6 @@ namespace AgenticRacing.Agents
 
         public override void CollectObservations(VectorSensor sensor)
         {
-            if (!_loggedObs)
-            {
-                _loggedObs = true;
-                var bp = GetComponent<Unity.MLAgents.Policies.BehaviorParameters>();
-                var dr = GetComponent<Unity.MLAgents.DecisionRequester>();
-                Debug.Log($"[RaceAgent] CollectObservations (first): track={_track != null} " +
-                          $"car={_car != null} progress={_progress != null} " +
-                          $"behaviorType={bp?.BehaviorType} actionSpec=C{bp?.BrainParameters.ActionSpec.NumContinuousActions}" +
-                          $"/D{bp?.BrainParameters.ActionSpec.NumDiscreteActions} " +
-                          $"decisionRequester={(dr != null ? "present" : "MISSING")} drAgent={(dr != null && dr.Agent != null)} " +
-                          $"sensors=[{DumpSensors()}]");
-            }
-
             if (_track == null) { for (int k = 0; k < ObsSize; k++) sensor.AddObservation(0f); return; }
 
             float maxSpeed = Mathf.Max(1f, _car.Config.MaxSpeed);
@@ -268,40 +231,9 @@ namespace AgenticRacing.Agents
                    Mathf.Lerp(straightSpeedFrac, cornerSpeedFrac, Mathf.Clamp01(turn / 55f));
         }
 
-        // Dumps the base Agent's private sensor list (name + flattened shape) so
-        // we can see duplicates / ordering. Reflection because `sensors` is
-        // internal to the ML-Agents assembly. Diagnostics only.
-        private string DumpSensors()
-        {
-            try
-            {
-                var f = typeof(Agent).GetField("sensors",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (!(f?.GetValue(this) is System.Collections.IEnumerable list)) return "reflect-fail";
-                var parts = new System.Collections.Generic.List<string>();
-                foreach (var o in list)
-                {
-                    if (o is ISensor si)
-                    {
-                        var shape = si.GetObservationSpec().Shape;
-                        var dims = new int[shape.Length];
-                        for (int d = 0; d < shape.Length; d++) dims[d] = shape[d];
-                        parts.Add($"{si.GetName()}({string.Join("x", dims)})");
-                    }
-                }
-                return string.Join(", ", parts);
-            }
-            catch (System.Exception e) { return "err:" + e.Message; }
-        }
-
         public override void OnActionReceived(ActionBuffers actions)
         {
-            int ac = ++_actionCount;
             _episodeSteps++;
-            if (ac == 1 || ac % 20000 == 0)
-                Debug.Log($"[RaceAgent] OnActionReceived #{ac}: track={_track != null} " +
-                          $"stepCount={StepCount} fwdSpeed={(_car != null ? _car.ForwardSpeed : 0f):F2}");
-
             if (_track == null) return;
 
             var a = actions.ContinuousActions;
@@ -311,18 +243,6 @@ namespace AgenticRacing.Agents
 
             _progress.Update(_rb.position);
             float fwdMetres = _progress.ConsumeForwardDelta();
-
-            // Rolling ~3 s trajectory, dumped on death (EndDiag) to see WHY an
-            // episode failed — diagnostics only. Sampled every 8 steps (~0.16 s).
-            if (_episodeSteps % 8 == 0)
-            {
-                _trajHead = (_trajHead + 1) % TrajLen;
-                _trajLat[_trajHead] = _progress.LateralOffset;
-                _trajSteer[_trajHead] = _car.Steer;
-                _trajSpeed[_trajHead] = _car.ForwardSpeed;
-                _trajBrake[_trajHead] = _car.Brake;
-                _trajTurn[_trajHead] = Mathf.Abs(CenterlineTurnDeg(0f, 24f));
-            }
 
             AddReward(fwdMetres * progressRewardPerMetre);
 
@@ -368,7 +288,7 @@ namespace AgenticRacing.Agents
             if (absLat > _halfWidth + offTrackMargin)
             {
                 AddReward(-offTrackPenalty);
-                EndDiag("offTrack", absLat);
+                ReportEpisodeEnd("offTrack");
                 EndEpisode();
                 return;
             }
@@ -386,7 +306,7 @@ namespace AgenticRacing.Agents
             if (_stuckTimer > stuckSeconds)
             {
                 AddReward(-offTrackPenalty);
-                EndDiag("stuck", _stuckTimer);
+                ReportEpisodeEnd("stuck");
                 EndEpisode();
                 return;
             }
@@ -398,7 +318,7 @@ namespace AgenticRacing.Agents
             if (_wrongWayTimer > wrongWaySeconds)
             {
                 AddReward(-offTrackPenalty);
-                EndDiag("wrongWay", _wrongWayTimer);
+                ReportEpisodeEnd("wrongWay");
                 EndEpisode();
                 return;
             }
@@ -413,7 +333,7 @@ namespace AgenticRacing.Agents
                 if (_episodeSteps > 60 && _lapArc - _stallArc < stallMinMetres)
                 {
                     AddReward(-offTrackPenalty);
-                    EndDiag("stall", _lapArc - _stallArc);
+                    ReportEpisodeEnd("stall");
                     EndEpisode();
                     return;
                 }
@@ -428,91 +348,34 @@ namespace AgenticRacing.Agents
                 // the MaxStep time budget is left — i.e. for finishing it fast.
                 float budgetLeft = MaxStep > 0 ? Mathf.Clamp01(1f - _episodeSteps / (float)MaxStep) : 0f;
                 AddReward(lapBonus + fastLapBonus * budgetLeft);
-                EndDiag("lap", _lapArc);
+                ReportEpisodeEnd("lap");
                 EndEpisode();
             }
         }
 
-        // Running tally of how episodes end, across all agents in the process
-        // (stuck / offTrack / wrongWay / lap / maxStep). Logged as a rolling
-        // window of the last N so the split is visible as training progresses,
-        // not just a lifetime average dominated by the bad early episodes.
-        private const int EndWindow = 400;
-        private static readonly System.Collections.Generic.Queue<string> _endRecent = new();
-        private static int _endTotal;
-        private static float _lapArcSum;
-
-        /// <summary>Fired on every episode end: (reason, steps, lapArc metres).
-        /// Used by the offline eval harness (<see cref="EvalRunner"/>).</summary>
+        /// <summary>Fired on every episode end with (reason, steps, lapArc metres).
+        /// Reasons: lap / offTrack / stuck / wrongWay / stall / maxStep. The
+        /// offline eval harness (<see cref="EvalRunner"/>) aggregates these.</summary>
         internal static event System.Action<string, int, float> AnyEpisodeEnded;
 
-        /// <summary>Set by the eval harness for demo recording: spawn on the racing
-        /// line, aligned, at speed — no training-time heading/lateral noise.</summary>
+        /// <summary>Eval harness: spawn on the centreline, aligned, at speed — no
+        /// training-time heading/lateral noise.</summary>
         internal static bool CleanSpawn;
 
         /// <summary>Eval harness override: when set, every episode uses this
-        /// directive instead of a random one, so a single stance can be inspected
-        /// (`eval.exe -directive attack` etc.).</summary>
+        /// directive instead of a random one (`eval.exe -directive attack`).</summary>
         internal static RaceDirective? ForcedDirective;
 
-        private void EndDiag(string reason, float value)
+        private void ReportEpisodeEnd(string reason)
         {
-            _diagCounted = true;
+            _endReported = true;
             AnyEpisodeEnded?.Invoke(reason, _episodeSteps, _lapArc);
-            _endTotal++;
-            _lapArcSum += _lapArc;
-
-            // First ~24 endings: where and how did it die, plus the ~3 s
-            // trajectory into the death (oldest -> newest), to tell apart
-            // "drifted off understeering" / "spun" / "controller didn't react".
-            if (_endTotal <= 24)
-            {
-                Debug.Log($"[RaceAgent] end #{_endTotal} '{reason}': lap%={_progress.Distance01 * 100f:F0} " +
-                          $"lapArc={_lapArc:F0}m steps={_episodeSteps} speed={_car.ForwardSpeed:F1} " +
-                          $"lateral={_progress.LateralOffset:F1}/{_halfWidth:F1}m\n" +
-                          $"    lat  : {TrajStr(_trajLat, "F1")}\n" +
-                          $"    steer: {TrajStr(_trajSteer, "F2")}\n" +
-                          $"    spd  : {TrajStr(_trajSpeed, "F0")}\n" +
-                          $"    brk  : {TrajStr(_trajBrake, "F2")}\n" +
-                          $"    turn : {TrajStr(_trajTurn, "F0")}");
-            }
-            System.Array.Clear(_trajLat, 0, TrajLen);
-            System.Array.Clear(_trajSteer, 0, TrajLen);
-            System.Array.Clear(_trajSpeed, 0, TrajLen);
-            System.Array.Clear(_trajBrake, 0, TrajLen);
-            System.Array.Clear(_trajTurn, 0, TrajLen);
-            _trajHead = -1;
-
-            _endRecent.Enqueue(reason);
-            while (_endRecent.Count > EndWindow) _endRecent.Dequeue();
-            if (_endTotal % EndWindow == 0)
-            {
-                var counts = new System.Collections.Generic.Dictionary<string, int>();
-                foreach (var r in _endRecent) { counts.TryGetValue(r, out int c); counts[r] = c + 1; }
-                var parts = new System.Collections.Generic.List<string>();
-                foreach (var kv in counts) parts.Add($"{kv.Key}={100f * kv.Value / _endRecent.Count:F0}%");
-                Debug.Log($"[RaceAgent] end reasons @ {_endTotal} (last {_endRecent.Count}): " +
-                          $"{string.Join(", ", parts)} | lifetime mean lapArc={_lapArcSum / _endTotal:F0}m");
-            }
         }
 
         private void OnCollisionEnter(Collision collision)
         {
             if (collision.gameObject.CompareTag(TrackEdgeColliders.EdgeTag))
                 AddReward(-wallHitPenalty);
-        }
-
-        // Ring buffer oldest -> newest as a compact string (diagnostics only).
-        private string TrajStr(float[] buf, string fmt)
-        {
-            if (_trajHead < 0) return "(none)";
-            var sb = new System.Text.StringBuilder();
-            for (int k = 1; k <= TrajLen; k++)
-            {
-                if (k > 1) sb.Append(' ');
-                sb.Append(buf[(_trajHead + k) % TrajLen].ToString(fmt));
-            }
-            return sb.ToString();
         }
 
         /// <summary>
@@ -625,18 +488,6 @@ namespace AgenticRacing.Agents
             float rawSteer = Mathf.Clamp((headingErrDeg + crossCorrDeg) / 16f, -1f, 1f);
             _steerSmooth = Mathf.Lerp(_steerSmooth, rawSteer, 0.35f);
             a[0] = _steerSmooth;
-
-            if (_dbgHeurT <= Time.time)
-            {
-                _dbgHeurT = Time.time + 1f;
-                float slipDeg = _rb.linearVelocity.sqrMagnitude > 0.5f
-                    ? Vector3.Angle(_rb.linearVelocity, transform.forward) : 0f;
-                Debug.Log($"[Heur] spd={speed:F1} |v|={_rb.linearVelocity.magnitude:F1} slip={slipDeg:F0} " +
-                          $"turnAhead={turnAheadDeg:F0} tgtSpd={targetSpeed:F1} " +
-                          $"str={a[0]:F2} thr={a[1]:F2} brk={a[2]:F2} lapArc={_lapArc:F0} off={carOffLeft:F1}");
-            }
         }
-
-        private static float _dbgHeurT;
     }
 }
