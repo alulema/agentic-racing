@@ -2038,6 +2038,27 @@ ahí en la Fase 6.3, confundiendo posición de parrilla con efecto del estratega
 
 **Ajuste**: P4 sube a `Conserve, agg 0.72, risk 0.50` para compensar el recorte de la rama
 `Conserve` sin tocar la semántica de la directiva (sigue con el sesgo de línea al centro).
-Estimado ~90 s → spread esperado ~5 s / ~6%. **Pendiente (humano)**: rebuild del eval
-player + re-run `-population` para confirmar; si P4 sigue siendo outlier, subir `agg` otro
-escalón. Cuando el spread baje de ~6 s, la población queda cerrada como línea base de §5.
+
+**Re-run de verificación (mismo setup, 2026-09-08)** — P4 baja de 96.9 s a 90.5 s:
+
+    | miembro       | Kind     | agg  | risk | laps | mean   | min–max     |
+    |---------------|----------|------|------|------|--------|-------------|
+    | P2-LateBrake  | Attack   | 0.62 | 0.55 |  8   |  85.8s | 84.8–87.5   |
+    | P5-Aggro      | Attack   | 0.58 | 0.62 |  8   |  86.3s | 85.9–87.4   |
+    | P1-Balanced   | Push     | 0.50 | 0.50 |  8   |  88.3s | 88.0–88.4   |
+    | P6-Steady     | Push     | 0.46 | 0.48 |  8   |  89.2s | 88.2–89.9   |
+    | P3-Defensive  | Defend   | 0.45 | 0.40 |  7   |  89.6s | 88.1–90.1   |
+    | P4-Smooth     | Conserve | 0.72 | 0.50 |  6   |  90.5s | 90.0–90.7   |
+    spread: 85.8s .. 90.5s  (+4.7s, 5% del más rápido)
+
+**Fase 3 Lite — CERRADA.** Los seis miembros en una banda de 4.7 s (5%), cada uno con
+min/max < 2 s. Los dos `Attack` (P2, P5) quedan ~2 s por delante del resto: es un orden
+*de estilo* (agresivo = más rápido), no una diferencia de habilidad — y la rotación de
+parrilla de la Fase 6.3 absorbe ese residuo. Ningún piloto "gana por un margen amplio"
+(criterio de §5). Esta tabla es la **línea base** contra la que se lee todo resultado de
+la Fase 6.3. La población vive en `RaceDirective.Population`; se reproduce con
+`eval.exe -population`.
+
+**Siguiente: Fase 4 — la capa agentic (el estratega LLM).** Es el punto del demo
+(CLAUDE.md §12, §6). El piloto (heurístico + canales de directiva) y su población ya son
+la superficie de escritura que el estratega necesita.

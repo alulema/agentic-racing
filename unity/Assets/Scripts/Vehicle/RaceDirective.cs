@@ -87,9 +87,11 @@ namespace AgenticRacing.Vehicle
         /// pace lever; P4 carries a higher value than the rest only to offset
         /// the Conserve branch's speed cut in <c>RaceAgent.Heuristic</c> so its
         /// lap time rejoins the pack while its line bias stays distinct.
-        /// Measured baseline (12-arena <c>-population</c> run, 2026-09-08): five
-        /// members in an 85.8-89.5 s band; see docs/Devlog.md. The eval harness
-        /// <c>-population</c> mode is what produces that table.
+        /// Confirmed baseline (12-arena <c>-population</c> run, 2026-09-08): all
+        /// six members in an 85.8-90.5 s band (+4.7 s, 5% of the fastest), each
+        /// with sub-2 s min/max spread; the two Attack presets sit ~2 s clear of
+        /// the rest, a style ordering, not a skill gap. Full table in
+        /// docs/Devlog.md. The eval harness <c>-population</c> mode reproduces it.
         /// </summary>
         public static readonly PopulationMember[] Population =
         {
