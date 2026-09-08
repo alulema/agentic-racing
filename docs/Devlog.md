@@ -1962,3 +1962,50 @@ correrlas entre sí en el óvalo y registrar tiempos de vuelta medios (la línea
 larga (varias vueltas), no muchos episodios cortos — hay que desactivar/relajar las
 terminaciones `stall`/`stuck`/`offTrack` para el modo demo (que un roce no "reinicie" el
 auto a mitad de carrera; en su lugar, respawn suave en la pista o penalización de tiempo).
+
+### Paso 5 (limpieza) + Fase 3 Lite: población de pilotos y su línea base (2026-09-08)
+
+**Paso 5 — Debug.Log de diagnóstico fuera (`0eedda1`).** `RaceAgent.cs` baja de ~505 a
+~340 líneas: se quitó el volcado de trayectoria de muerte (`_trajLat/Steer/Speed/Brake/
+Turn` + `TrajStr`), el log rodante de razones de fin (`_endRecent`/`_endTotal`/
+`_lapArcSum`/`EndWindow`), los one-shots `[RaceAgent]` de `Initialize`/`CollectObservations`,
+`DumpSensors` por reflexión y el `[Heur]` por segundo. `ReportEpisodeEnd` queda mínimo
+(marca `_endReported`, dispara `AnyEpisodeEnded`). Recompensa, límites de episodio y el
+piloto heurístico intactos. Único `Debug` que sobrevive: el `LogError` de "no
+TrainingArena".
+
+**Fase 3 Lite — la población son 6 presets de directiva, no snapshots RL.** Camino A: el
+piloto es un solo controlador scripted, así que la "población" de la Fase 3 son 6
+`RaceDirective.PopulationMember` fijas (`RaceDirective.Population`), emparejadas en ritmo
+*por construcción* (mismo `Heuristic()`, distintos `Kind`/`Aggression`/`RiskTolerance`) en
+vez de elegir checkpoints —que §5/§11 desaconsejan porque el último gana siempre—. Presets
+deliberadamente mid-range y juntos (agg 0.45–0.62), no el rango 0.15–0.85 del eval de
+directivas, para que ninguno saque segundos al resto y no contamine la Fase 6.3:
+
+| miembro | Kind | agg | risk |
+|---|---|---|---|
+| P1-Balanced  | Push     | 0.50 | 0.50 |
+| P2-LateBrake | Attack   | 0.62 | 0.55 |
+| P3-Defensive | Defend   | 0.45 | 0.40 |
+| P4-Smooth    | Conserve | 0.52 | 0.45 |
+| P5-Aggro     | Attack   | 0.58 | 0.62 |
+| P6-Steady    | Push     | 0.46 | 0.48 |
+
+**Cómo se corren entre sí**: flag `-population` nuevo en `EvalRunner`. Implica
+`-heuristic`, ventana 360 s, reparte los 6 miembros en las **12 arenas** del eval
+(`Fase2EvalBuild` ahora pide `SetArenaCount(12)` → 2 arenas por miembro) vía
+`RaceAgent.InstanceDirective` (override por-agente, gana sobre `ForcedDirective`).
+`AnyEpisodeEnded` ahora pasa el `RaceAgent` para atribuir cada vuelta a su miembro. Al
+cierre loguea `[Eval] POPULATION baseline`: `mean`/`min`/`max` de tiempo de vuelta por
+miembro y el spread fastest↔slowest.
+
+    unity\Builds\eval-windows\eval.exe -population -logFile eval-population.log
+
+**Pendiente (humano)**: rebuild del eval player en la NUC y correr `-population`; pegar la
+tabla `[Eval] POPULATION baseline` acá. Es la línea base de §5 contra la que se lee la
+Fase 6.3. Si el spread es amplio (un miembro gana sistemáticamente), acercar su preset al
+pelotón y repetir antes de pasar a Fase 4.
+
+- [x] Paso 5 — limpieza de `Debug.Log`.
+- [ ] Paso 4 — documentar el intento RL race01-08 para el post técnico (no bloquea Fase 4).
+- [ ] Fase 3 Lite — falta la corrida `-population` y su tabla de tiempos.

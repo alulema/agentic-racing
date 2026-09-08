@@ -166,6 +166,22 @@ Flags del `eval.exe`:
   scripted): la referencia "¿esta pista se puede manejar?".
 - `-record` — implica `-heuristic`, corre 300 s y adjunta un `DemonstrationRecorder`
   a cada agente. Escribe `.demo` en `unity\Builds\eval-windows\demos\`.
+- `-directive <attack|defend|conserve|push>` y `-aggression <lo|mid|hi>` — fuerzan
+  una misma directiva del estratega en todos los agentes, para ver su efecto.
+- `-population` — implica `-heuristic`, corre 360 s y reparte los 6 miembros de
+  `RaceDirective.Population` en las 12 arenas del eval (2 por miembro), luego
+  loguea `[Eval] POPULATION baseline`: tiempo de vuelta medio/min/max por miembro
+  y el spread entre el más rápido y el más lento. Es la línea base de la Fase 3
+  (CLAUDE.md §5) — si un miembro gana por un margen amplio, su preset no está
+  emparejado en ritmo y hay que acercarlo al pelotón antes de la Fase 6.3.
+- `-seconds <n>` — cambia la ventana de eval (por defecto 120 s, 300 con
+  `-record`, 360 con `-population`).
+
+```powershell
+# línea base de la población de pilotos (Fase 3)
+unity\Builds\eval-windows\eval.exe -population -logFile eval-population.log
+# -> leer la línea [Eval] POPULATION baseline
+```
 
 ## 6. Imitación desde la heurística (BC + GAIL)
 

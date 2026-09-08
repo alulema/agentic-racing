@@ -59,7 +59,9 @@ namespace AgenticRacing.EditorTools
 
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             var go = new GameObject("Eval");
-            go.AddComponent<TrainingSceneBootstrap>();
+            // 12 arenas: an even 2 per member for the Fase 3 -population run
+            // (6 members), and harmless for the other eval modes.
+            go.AddComponent<TrainingSceneBootstrap>().SetArenaCount(12);
             go.AddComponent<EvalRunner>();
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);

@@ -115,7 +115,7 @@ namespace AgenticRacing.Agents
 
             if (_track == null) return;
 
-            _directive = ForcedDirective ?? RaceDirective.RandomEpisode(_rng);
+            _directive = InstanceDirective ?? ForcedDirective ?? RaceDirective.RandomEpisode(_rng);
 
             var center = _track.Centerline;
             int n = center.Count;
@@ -353,23 +353,31 @@ namespace AgenticRacing.Agents
             }
         }
 
-        /// <summary>Fired on every episode end with (reason, steps, lapArc metres).
-        /// Reasons: lap / offTrack / stuck / wrongWay / stall / maxStep. The
-        /// offline eval harness (<see cref="EvalRunner"/>) aggregates these.</summary>
-        internal static event System.Action<string, int, float> AnyEpisodeEnded;
+        /// <summary>Fired on every episode end with (agent, reason, steps, lapArc
+        /// metres). Reasons: lap / offTrack / stuck / wrongWay / stall / maxStep.
+        /// The offline eval harness (<see cref="EvalRunner"/>) aggregates these;
+        /// the agent ref lets its <c>-population</c> mode attribute lap times to a
+        /// specific pilot.</summary>
+        internal static event System.Action<RaceAgent, string, int, float> AnyEpisodeEnded;
 
         /// <summary>Eval harness: spawn on the centreline, aligned, at speed — no
         /// training-time heading/lateral noise.</summary>
         internal static bool CleanSpawn;
 
-        /// <summary>Eval harness override: when set, every episode uses this
-        /// directive instead of a random one (`eval.exe -directive attack`).</summary>
+        /// <summary>Eval harness override applied to <b>every</b> agent: when set,
+        /// each episode uses this directive instead of a random one
+        /// (`eval.exe -directive attack`).</summary>
         internal static RaceDirective? ForcedDirective;
+
+        /// <summary>Eval harness per-agent override (Fase 3 <c>-population</c>):
+        /// this one agent runs a fixed population member. Takes precedence over
+        /// <see cref="ForcedDirective"/>.</summary>
+        internal RaceDirective? InstanceDirective;
 
         private void ReportEpisodeEnd(string reason)
         {
             _endReported = true;
-            AnyEpisodeEnded?.Invoke(reason, _episodeSteps, _lapArc);
+            AnyEpisodeEnded?.Invoke(this, reason, _episodeSteps, _lapArc);
         }
 
         private void OnCollisionEnter(Collision collision)
