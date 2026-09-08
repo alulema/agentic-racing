@@ -75,6 +75,7 @@ namespace AgenticRacing.Vehicle
 
             ApplyDrive(fwd, vFwd);
             ApplySteering(vFwd, dt);
+            ApplyLateralGrip(fwd);
         }
 
         private void PollKeyboard()
@@ -147,16 +148,24 @@ namespace AgenticRacing.Vehicle
             // Reversing inverts the steering sense, like a real car.
             if (vFwd < -0.1f) yawDeg = -yawDeg;
 
-            _rb.MoveRotation(_rb.rotation * Quaternion.Euler(0f, yawDeg, 0f));
+            Quaternion delta = Quaternion.Euler(0f, yawDeg, 0f);
+            _rb.MoveRotation(_rb.rotation * delta);
+        }
 
-            // Grip = the tyres also rotate the VELOCITY toward the new heading, so
-            // the car goes roughly where it points. GripRedirect < 1 leaves a bit
-            // of slip (drift). Previous models either scrubbed the speed off
-            // (turn -> brake -> pirouette) or only nudged the velocity via a side
-            // force (turn -> plough wide -> off track). Rotating v with the yaw
-            // preserves |v| and actually carves the corner. (Devlog 2026-09-08)
-            _rb.linearVelocity = Quaternion.Euler(0f, yawDeg * config.GripRedirect, 0f)
-                                 * _rb.linearVelocity;
+        private void ApplyLateralGrip(Vector3 fwd)
+        {
+            Vector3 v = _rb.linearVelocity;
+            Vector3 right = transform.right;
+            float vRight = Vector3.Dot(v, right);
+
+            // Tyres REDIRECT the car's momentum along its heading; they don't
+            // scrub the speed off. Remove a fraction of the sideways velocity and
+            // put GripRedirect of that magnitude back along +forward. Deleting it
+            // outright (the old model) meant every steer braked the car, so
+            // RL/heuristic learned to never turn (Devlog 2026-09-07).
+            float k = Mathf.Clamp01(config.LateralGrip * Time.fixedDeltaTime);
+            float dSide = -vRight * k;
+            _rb.linearVelocity = v + right * dSide + fwd * (Mathf.Abs(dSide) * config.GripRedirect);
         }
 
         /// <summary>Places the car at a pose and clears its motion (grid reset).</summary>
