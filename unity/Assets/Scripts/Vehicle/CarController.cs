@@ -55,7 +55,13 @@ namespace AgenticRacing.Vehicle
             _rb.linearDamping = config.LinearDrag;
             _rb.angularDamping = config.AngularDrag;
             _rb.interpolation = RigidbodyInterpolation.Interpolate;
-            _rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            // Discrete, NOT Continuous: ApplySteering yaws the body every frame
+            // with MoveRotation, and CCD's sweep over the rotating box collider
+            // generated phantom self-contacts that braked the car hard whenever it
+            // steered — the "car crawls / stops dead mid-track" bug that dogged
+            // race01-08 (Devlog 2026-09-08). The 1 m walls are thick enough that a
+            // 0.44 m/step car never tunnels, so CCD buys nothing here.
+            _rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
             _rb.useGravity = false;
             // Fase 1 track is a flat ribbon at Y = 0 with no ground plane, so pin
             // the car to that plane (no falling through the mesh collider) and
