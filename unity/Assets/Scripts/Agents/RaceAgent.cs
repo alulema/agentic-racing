@@ -439,6 +439,32 @@ namespace AgenticRacing.Agents
             if (RaceMode) _directive = directive;
         }
 
+        /// <summary>Fase 4 race scene: put the car back on the racing surface at
+        /// its current lap arc, facing lap direction, at a rolling speed, and
+        /// clear the heuristic's recovery state. RaceDirector calls this — and
+        /// applies the time penalty — when a car is off the track, dead-stopped
+        /// or driving backwards for too long; it is the demo's stand-in for the
+        /// training EndEpisode() reset, which would be catastrophic mid-race
+        /// (§6.3 note). No-op outside race mode.</summary>
+        internal void RaceSoftRespawn()
+        {
+            if (!RaceMode || _track == null) return;
+
+            var c = _track.Centerline;
+            int n = c.Count;
+            int s = _progress.NearestSample;
+            Vector3 tan = c[(s + 1) % n] - c[s];
+            tan.y = 0f;
+            tan = tan.sqrMagnitude > 1e-6f ? tan.normalized : transform.forward;
+
+            _car.PlaceAt(c[s] + Vector3.up * 0.4f, tan);
+            _rb.linearVelocity = tan * launchSpeed;
+            _progress.Reset(_rb.position);
+            _wallJamTimer = 0f;
+            _escapeUntil = 0f;
+            _steerSmooth = 0f;
+        }
+
         private void ReportEpisodeEnd(string reason)
         {
             _endReported = true;

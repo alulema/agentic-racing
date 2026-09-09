@@ -60,6 +60,18 @@ namespace AgenticRacing.Agents
         [Tooltip("How long that gap must hold before the call fires — not a momentary blip (§6.6).")]
         [SerializeField] private float rivalEngageHoldSeconds = 2f;
 
+        [Header("Soft recovery (§6.3: never a hard reset mid-race)")]
+        [Tooltip("Metres past the wall before a car counts as off the track.")]
+        [SerializeField] private float offTrackMargin = 2f;
+        [SerializeField] private float offTrackRecoverSeconds = 1.5f;
+        [Tooltip("Speed (m/s) under which a car that has started racing counts as dead-stopped.")]
+        [SerializeField] private float stuckSpeed = 0.6f;
+        [SerializeField] private float stuckRecoverSeconds = 4f;
+        [Tooltip("Heading vs track tangent below this dot product, at speed, = driving backwards.")]
+        [SerializeField] private float wrongWayRecoverSeconds = 3f;
+        [Tooltip("Time penalty added (as lost track position) each time a car is recovered.")]
+        [SerializeField] private float softRecoverPenaltySeconds = 4f;
+
         [Header("Overlay")]
         [SerializeField] private bool emitOverlay = true;
         [Tooltip("Grid slot the HUD highlights as 'me'; -1 for none.")]
@@ -72,6 +84,7 @@ namespace AgenticRacing.Agents
 
         private TrackData _track;
         private float _trackLen;
+        private float _halfWidth;
         private CornerInfo[] _corners;
         private readonly List<CarState> _cars = new();
         private readonly List<CarState> _sorted = new();   // reused each tick
@@ -129,6 +142,7 @@ namespace AgenticRacing.Agents
                 _track = TrackGenerator.Generate(trackSeed);
                 _trackLen = _track.Length;
             }
+            _halfWidth = _track.Width * 0.5f;
             _corners = BuildCornerMap(_track);
             TrackEdgeColliders.Build(_track, transform);
 
@@ -321,10 +335,12 @@ namespace AgenticRacing.Agents
                 if (d > 0.5f) st.CrossArmed = true;
                 st.PrevDistance01 = d;
 
-                st.TotalArc = st.Crossings * _trackLen + st.Progress.ArcMetres;
+                st.TotalArc = st.Crossings * _trackLen + st.Progress.ArcMetres - st.ArcPenalty;
 
                 // Mirror the strategist's live directive into the pilot (§6.1).
                 st.Agent.SetRaceDirective(st.Strategist.CurrentDirective);
+
+                MaybeSoftRecover(st, dt);
             }
 
             // 2. classification + position-change events.
@@ -383,7 +399,7 @@ namespace AgenticRacing.Agents
         private void HandleCrossing(CarState st, float now)
         {
             st.Crossings++;
-            st.TotalArc = st.Crossings * _trackLen + st.Progress.ArcMetres;
+            st.TotalArc = st.Crossings * _trackLen + st.Progress.ArcMetres - st.ArcPenalty;
 
             if (st.Crossings == 1)
             {
@@ -405,6 +421,54 @@ namespace AgenticRacing.Agents
             var evt = startingFinalLap ? StrategyEvent.FinalLap : StrategyEvent.LapCompleted;
             if (startingFinalLap) st.FinalLapFired = true;
             st.Strategist.Notify(evt, BuildSnapshot(st, evt));
+        }
+
+        /// <summary>Watch for a car that is off the track, dead-stopped, or
+        /// driving backwards for too long and, instead of a hard reset, put it
+        /// back on the racing surface at its current arc with a time penalty
+        /// (§6.3 note: the race is one long episode).</summary>
+        private void MaybeSoftRecover(CarState st, float dt)
+        {
+            if (_finished) return;
+
+            bool offTrack = Mathf.Abs(st.Progress.LateralOffset) > _halfWidth + offTrackMargin;
+            st.OffTrackTime = offTrack ? st.OffTrackTime + dt : 0f;
+
+            bool racing = st.Crossings >= 1 || st.AvgSpeed > 3f;
+            bool stopped = racing && Mathf.Abs(st.Car.ForwardSpeed) < stuckSpeed;
+            st.StuckTime = stopped ? st.StuckTime + dt : 0f;
+
+            float align = Vector3.Dot(st.Car.transform.forward, st.Progress.Tangent);
+            bool backwards = st.Crossings >= 1 && align < -0.3f && st.AvgSpeed > 4f;
+            st.WrongWayTime = backwards ? st.WrongWayTime + dt : 0f;
+
+            string reason =
+                st.OffTrackTime > offTrackRecoverSeconds ? "off track" :
+                st.WrongWayTime > wrongWayRecoverSeconds ? "wrong way" :
+                st.StuckTime > stuckRecoverSeconds ? "stuck" : null;
+            if (reason != null) SoftRecover(st, reason);
+        }
+
+        private void SoftRecover(CarState st, string reason)
+        {
+            st.Agent.RaceSoftRespawn();
+
+            Vector3 p = st.Car.transform.position;
+            st.Progress.Reset(p);
+            st.PrevDistance01 = st.Progress.Distance01;
+            st.CrossArmed = st.PrevDistance01 > 0.5f;   // don't score a phantom crossing
+
+            // The reset saved the car the seconds it would have spent driving
+            // back; dock that as lost track position so it rejoins where it
+            // belongs, not ahead of it.
+            st.ArcPenalty += softRecoverPenaltySeconds * Mathf.Max(8f, st.AvgSpeed);
+            st.TotalArc = st.Crossings * _trackLen + st.Progress.ArcMetres - st.ArcPenalty;
+
+            st.OffTrackTime = st.StuckTime = st.WrongWayTime = 0f;
+            st.Incidents++;
+            st.Strategist.AddNote(
+                $"L{Mathf.Max(1, st.Crossings)}: {reason}, recovered (+{softRecoverPenaltySeconds:F0}s)");
+            st.Strategist.Notify(StrategyEvent.Incident, BuildSnapshot(st, StrategyEvent.Incident));
         }
 
         private void UpdateClassification()
@@ -542,6 +606,11 @@ namespace AgenticRacing.Agents
             public int Position;
             public int PrevPosition;
             public int Incidents;
+
+            public float ArcPenalty;      // metres of track position docked by soft recoveries
+            public float OffTrackTime;
+            public float StuckTime;
+            public float WrongWayTime;
 
             public float PrevDistance01;
             public bool CrossArmed = true;

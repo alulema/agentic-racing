@@ -2278,3 +2278,45 @@ el `TrackData` ya generado (visuales y sim comparten uno solo).
   escena en Play y ver la parrilla, las vueltas, el encuadre de camara y (con el
   server arriba) las lineas de radio. Generar los `.meta` que falten de la parte
   1/2 (`Strategy/`, etc.).
+
+### Fase 4 (parte 2/2) paso 3: respawn suave + penalizacion de tiempo (2026-09-08, sesion Ubuntu)
+
+En modo carrera el episodio es UNA carrera larga, asi que `RaceAgent.RaceMode`
+nunca llama `EndEpisode()` (el reset de entrenamiento reposiciona en un punto
+aleatorio — catastrofico a mitad de carrera). En su lugar, un **respawn suave con
+penalizacion de tiempo** (CLAUDE.md §6.3, nota de diseno):
+
+- `RaceAgent.RaceSoftRespawn()` (nuevo, `internal`): coloca el auto en la
+  centerline en su `NearestSample` actual (conserva el arco de vuelta), mirando
+  la direccion de carrera, con velocidad de rodaje (`launchSpeed`), y limpia el
+  estado de recuperacion de la heuristica (`_wallJamTimer`/`_escapeUntil`/
+  `_steerSmooth`). No termina el episodio.
+- `RaceDirector.MaybeSoftRecover(car, dt)` (cada tick, por auto): acumula tres
+  temporizadores y dispara `SoftRecover` cuando uno pasa su umbral —
+  **fuera de pista** (`|LateralOffset| > halfWidth + 2 m` por >1.5 s),
+  **parado** (empezo a correr y `|ForwardSpeed| < 0.6 m/s` por >4 s), o
+  **al reves** (`dot(forward, tangent) < -0.3` a >4 m/s por >3 s).
+- `RaceDirector.SoftRecover(car, reason)`: llama a `RaceSoftRespawn`, re-sincroniza
+  el `TrackProgress` del director (y `CrossArmed` para no contar un cruce
+  fantasma), suma la penalizacion a `car.ArcPenalty` (= `penaltySeconds *
+  max(8, EMA velocidad)` metros, default 4 s) y la resta de `TotalArc` en todos
+  lados — asi el auto reaparece en la posicion que le toca, no adelante. Cuenta
+  como incidente (§6.2), agrega nota lap-over-lap y dispara un `Incident` al
+  estratega.
+
+`TotalArc = Crossings*len + arc - ArcPenalty` en `FixedUpdate` y en
+`HandleCrossing`; el conteo de vueltas (por wrap de `Distance01`) es independiente
+y no se ve afectado por la penalizacion.
+
+Typecheck Roslyn Unity 6000.3.22f1 (runtime + Demo + `Fase4RaceScene`): 0 errores.
+
+**Pendiente:**
+- Paso 4 — flujo `race:*` + `radio:msg` end-to-end sin `?mock=1`, contra
+  `docker compose up`.
+- Paso 5 (Editor Linux) — `Fase4RaceScene.Setup` -> commitear `Race.unity` +
+  `.meta`; compila + EditMode verdes; abrir en Play y observar parrilla, vueltas,
+  encuadre de camara, respawn suave y (con server) lineas de radio. Generar los
+  `.meta` que falten de la parte 1/2.
+- Tuning de fisica de contacto auto-auto (cubos ligeros con Y congelada): un
+  choque fuerte puede lanzar a un auto; los umbrales de `MaybeSoftRecover` son un
+  primer valor, ajustar tras ver la escena en el Editor.
