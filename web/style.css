@@ -77,6 +77,8 @@ body {
 #standings .gap { text-align: right; color: var(--color-text-dim, #9aa); }
 #standings .dir { text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.04em; }
 #standings tr.me .car { color: var(--color-accent); }
+#standings tr.done { opacity: 0.62; }
+#standings tr.done .pos { color: var(--color-accent); }
 
 /* Round colour chip: same colour as the car body in the 3D view and the
    team-radio line, so rows/cars/messages can be matched at a glance. */
@@ -114,6 +116,15 @@ body {
   letter-spacing: 0.12em;
   color: var(--color-text-dim, #9aa);
 }
+#radio-age {
+  font-family: var(--font-mono);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.62rem;
+  opacity: 0.75;
+}
+#radio-age::before { content: "· "; }
+#radio-age:empty { display: none; }
 
 .radio-msg {
   background: color-mix(in srgb, var(--color-bg-card) 92%, transparent);
@@ -130,6 +141,7 @@ body {
 .radio-msg .head {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 0.5rem;
   font-family: var(--font-mono);
   font-size: 0.68rem;
@@ -137,6 +149,10 @@ body {
   margin-bottom: 0.15rem;
 }
 .radio-msg .who { font-weight: 700; color: var(--car-color, var(--color-text)); }
+.radio-msg .who .count { margin-left: 0.35em; font-weight: 700; opacity: 0.85; }
+.radio-msg .who .count:empty { display: none; }
+.radio-msg .head-r { display: flex; align-items: center; gap: 0.4rem; flex: none; }
+.radio-msg .age { opacity: 0.7; }
 .radio-msg .tag {
   font-family: var(--font-mono);
   font-size: 0.62rem;
@@ -184,3 +200,31 @@ body {
   color: var(--color-text-dim, #9aa);
 }
 #waiting.hidden { display: none; }
+
+/* --- race-over banner ------------------------------------------------- */
+
+#race-over {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  gap: 0.3rem;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-bg) 55%, transparent);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+  animation: radio-in 0.35s ease;
+}
+#race-over.show { display: flex; }
+#race-over span {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-accent);
+}

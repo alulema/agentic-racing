@@ -89,7 +89,10 @@ namespace AgenticRacing.Agents
         private readonly List<CarState> _cars = new();
         private readonly List<CarState> _sorted = new();   // reused each tick
         private bool _started;
-        private bool _finished;
+        private bool _finished;      // every car has finished; the director stops
+        private bool _chequered;     // the leader has finished; HUD reads FINISHED
+        private int _finishSeq;      // running finish counter -> CarState.FinishOrder
+        private float _winnerFinishTime;
         private float _nextTickAt;
 
         /// <summary>True once the leader has completed <see cref="totalLaps"/>.</summary>
@@ -368,59 +371,61 @@ namespace AgenticRacing.Agents
 
             // 2. classification + position-change events.
             UpdateClassification();
-            foreach (var st in _cars)
-            {
-                if (st.Position == st.PrevPosition) continue;
-                st.Strategist.Notify(StrategyEvent.PositionChange, BuildSnapshot(st, StrategyEvent.PositionChange));
-                st.PrevPosition = st.Position;
-            }
 
-            // 3. sustained rival-in-range (§6.6: not a momentary crossing).
-            for (int i = 0; i < _sorted.Count; i++)
+            // No more strategy calls once the chequered flag is out — the running
+            // order just settles as backmarkers finish.
+            if (!_chequered)
             {
-                var st = _sorted[i];
-                if (i == 0)
+                foreach (var st in _cars)
                 {
-                    st.RivalInRangeSince = -1f;
-                    st.RivalRangeArmed = true;
-                    continue;
+                    if (st.Position == st.PrevPosition) continue;
+                    st.Strategist.Notify(StrategyEvent.PositionChange, BuildSnapshot(st, StrategyEvent.PositionChange));
+                    st.PrevPosition = st.Position;
                 }
 
-                var ahead = _sorted[i - 1];
-                float gapSec = (ahead.TotalArc - st.TotalArc) / Mathf.Max(8f, st.AvgSpeed);
-                if (gapSec < rivalEngageGapSeconds)
+                // 3. sustained rival-in-range (§6.6: not a momentary crossing).
+                for (int i = 0; i < _sorted.Count; i++)
                 {
-                    if (st.RivalInRangeSince < 0f) st.RivalInRangeSince = now;
-                    if (st.RivalRangeArmed && now - st.RivalInRangeSince >= rivalEngageHoldSeconds)
+                    var st = _sorted[i];
+                    if (i == 0)
                     {
-                        st.RivalRangeArmed = false;
-                        st.Strategist.Notify(StrategyEvent.RivalInRange, BuildSnapshot(st, StrategyEvent.RivalInRange));
+                        st.RivalInRangeSince = -1f;
+                        st.RivalRangeArmed = true;
+                        continue;
+                    }
+
+                    var ahead = _sorted[i - 1];
+                    float gapSec = (ahead.TotalArc - st.TotalArc) / Mathf.Max(8f, st.AvgSpeed);
+                    if (gapSec < rivalEngageGapSeconds)
+                    {
+                        if (st.RivalInRangeSince < 0f) st.RivalInRangeSince = now;
+                        if (st.RivalRangeArmed && now - st.RivalInRangeSince >= rivalEngageHoldSeconds)
+                        {
+                            st.RivalRangeArmed = false;
+                            st.Strategist.Notify(StrategyEvent.RivalInRange, BuildSnapshot(st, StrategyEvent.RivalInRange));
+                        }
+                    }
+                    else if (gapSec > rivalEngageGapSeconds * 1.6f)
+                    {
+                        st.RivalInRangeSince = -1f;
+                        st.RivalRangeArmed = true;
                     }
                 }
-                else if (gapSec > rivalEngageGapSeconds * 1.6f)
-                {
-                    st.RivalInRangeSince = -1f;
-                    st.RivalRangeArmed = true;
-                }
             }
 
-            // 4. overlay tick.
+            // 4. overlay tick (keeps flowing after the flag so the HUD shows the
+            // backmarkers cross the line and stop).
             if (emitOverlay && now >= _nextTickAt)
             {
                 _nextTickAt = now + Mathf.Max(0.05f, tickInterval);
                 EmitTick();
             }
-
-            // 5. race end (leader has completed every lap).
-            if (_sorted.Count > 0 && _sorted[0].LapsCompleted >= totalLaps)
-            {
-                _finished = true;
-                if (emitOverlay) EmitEnd();
-            }
         }
 
         private void HandleCrossing(CarState st, float now)
         {
+            if (st.Finished) return;
+
             st.Crossings++;
             st.TotalArc = st.Crossings * _trackLen + st.Progress.ArcMetres - st.ArcPenalty;
 
@@ -438,12 +443,44 @@ namespace AgenticRacing.Agents
 
             st.Strategist.AddNote($"L{st.LapsCompleted}: {st.LastLapTime:F1}s, P{st.Position}");
 
-            if (st.LapsCompleted >= totalLaps) return;   // race over for this car
+            // Finish: completed every lap, or the chequered flag is already out and
+            // this car has just crossed the line. Either way it stops here.
+            if (st.LapsCompleted >= totalLaps || _chequered)
+            {
+                FinishCar(st, now);
+                return;
+            }
 
             bool startingFinalLap = st.LapsCompleted == totalLaps - 1 && !st.FinalLapFired;
             var evt = startingFinalLap ? StrategyEvent.FinalLap : StrategyEvent.LapCompleted;
             if (startingFinalLap) st.FinalLapFired = true;
             st.Strategist.Notify(evt, BuildSnapshot(st, evt));
+        }
+
+        /// <summary>The car has taken the chequered flag: park it, lock its
+        /// classification place, and — if it is the winner — end the race for the
+        /// HUD. The director keeps ticking until every car has finished so the
+        /// backmarkers are seen crossing the line and stopping.</summary>
+        private void FinishCar(CarState st, float now)
+        {
+            st.Finished = true;
+            st.FinishOrder = ++_finishSeq;
+            st.Agent.RaceStop();
+            st.Strategist.AddNote($"Chequered flag — P{st.FinishOrder}, {st.LapsCompleted} laps");
+
+            if (_finishSeq == 1)
+            {
+                _chequered = true;
+                _winnerFinishTime = now;
+                if (emitOverlay) EmitEnd();
+            }
+            st.FinishGap = now - _winnerFinishTime;
+
+            UpdateClassification();
+            if (emitOverlay) EmitTick();
+
+            if (_cars.TrueForAll(c => c.Finished))
+                _finished = true;
         }
 
         /// <summary>Watch for a car that is off the track, dead-stopped, or
@@ -452,7 +489,7 @@ namespace AgenticRacing.Agents
         /// (§6.3 note: the race is one long episode).</summary>
         private void MaybeSoftRecover(CarState st, float dt)
         {
-            if (_finished) return;
+            if (_finished || st.Finished) return;
 
             bool offTrack = Mathf.Abs(st.Progress.LateralOffset) > _halfWidth + offTrackMargin;
             st.OffTrackTime = offTrack ? st.OffTrackTime + dt : 0f;
@@ -498,7 +535,14 @@ namespace AgenticRacing.Agents
         {
             _sorted.Clear();
             _sorted.AddRange(_cars);
-            _sorted.Sort((a, b) => b.TotalArc.CompareTo(a.TotalArc));
+            // Finished cars hold their finish order at the front; everyone still
+            // running is ranked behind them by track position.
+            _sorted.Sort((a, b) =>
+            {
+                if (a.Finished && b.Finished) return a.FinishOrder.CompareTo(b.FinishOrder);
+                if (a.Finished != b.Finished) return a.Finished ? -1 : 1;
+                return b.TotalArc.CompareTo(a.TotalArc);
+            });
             for (int i = 0; i < _sorted.Count; i++) _sorted[i].Position = i + 1;
         }
 
@@ -594,8 +638,10 @@ namespace AgenticRacing.Agents
         {
             j.Obj().Field("pos", st.Position).Field("id", st.CarId).Field("name", st.Name);
             if (st.Position == 1 || _sorted.Count == 0) j.Null("gap");
+            else if (st.Finished) j.Field("gap", st.FinishGap);
             else j.Field("gap", (_sorted[0].TotalArc - st.TotalArc) / Mathf.Max(8f, st.AvgSpeed));
             if (st.LastLapTime > 0f) j.Field("lastLap", st.LastLapTime); else j.Null("lastLap");
+            if (st.Finished) j.Field("done", true);
             if (withDirective)
                 j.Field("directive", st.Strategist.CurrentDirective.Kind.ToString().ToLowerInvariant());
             j.EndObj();
@@ -629,6 +675,9 @@ namespace AgenticRacing.Agents
             public int Position;
             public int PrevPosition;
             public int Incidents;
+            public bool Finished;
+            public int FinishOrder;   // 1..N — order the chequered flag was taken
+            public float FinishGap;   // seconds behind the winner at the flag
 
             public float ArcPenalty;      // metres of track position docked by soft recoveries
             public float OffTrackTime;

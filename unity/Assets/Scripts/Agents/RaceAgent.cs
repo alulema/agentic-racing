@@ -267,6 +267,15 @@ namespace AgenticRacing.Agents
             _episodeSteps++;
             if (_track == null) return;
 
+            if (RaceMode && _raceStopped)
+            {
+                // Chequered flag taken: park the car and ignore the pilot.
+                _car.Throttle = 0f;
+                _car.Steer = 0f;
+                _car.Brake = 1f;
+                return;
+            }
+
             var a = actions.ContinuousActions;
             _car.Steer = Mathf.Clamp(a[0], -1f, 1f);
             _car.Throttle = Mathf.Clamp(a[1], -1f, 1f);
@@ -429,6 +438,16 @@ namespace AgenticRacing.Agents
         /// off-track/lap <see cref="Agent.EndEpisode"/>. Set together with
         /// <see cref="ExternalTrack"/> and <see cref="InstanceDirective"/>.</summary>
         internal bool RaceMode;
+
+        private bool _raceStopped;
+
+        /// <summary>Fase 4 race scene: this car has taken the chequered flag.
+        /// From here on it brakes to a stop and the pilot is ignored. RaceDirector
+        /// calls this the moment the car crosses the line on its final lap.</summary>
+        internal void RaceStop()
+        {
+            if (RaceMode) _raceStopped = true;
+        }
 
         /// <summary>Fase 4 race scene: the strategist pushes its live directive
         /// here every tick so the pilot's driving — and the directive channels in

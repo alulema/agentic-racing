@@ -2429,3 +2429,42 @@ auto es cual. Cambios (esteticos):
   Radio. Color desde `race:start` (`carColors`); sin cambio de protocolo.
   Servido desde `/web` -> basta `git pull` en Ubuntu + refrescar.
 - `web/style.css` `.swatch`.
+
+### Fase 4: bandera a cuadros — los autos paran, y panel de radio legible (2026-09-09)
+
+Feedback del dueno tras la corrida en Windows: (a) los autos seguian corriendo
+tras la vuelta final; (b) en el panel de radio no se distinguia una linea nueva
+de una repetida ni se sabia si el estratega seguia hablando.
+
+**Fin de carrera (`RaceDirector` + `RaceAgent`).**
+- `RaceAgent.RaceStop()` / `_raceStopped`: al cruzar la meta en su ultima vuelta
+  el auto frena y pasa a ignorar al piloto (`OnActionReceived` fuerza
+  throttle 0 / brake 1). No termina el episodio.
+- `RaceDirector.FinishCar`: cuando un auto completa `totalLaps` (o ya salio la
+  bandera y cruza meta) queda `Finished` con `FinishOrder`, se le llama
+  `RaceStop()`, y su fila de clasificacion se congela en ese orden
+  (`UpdateClassification` pone a los terminados al frente por `FinishOrder`, el
+  resto por `TotalArc`). El primero en terminar dispara `_chequered` +
+  `race:end` (HUD -> FINISHED + banner). El director sigue tickeando hasta que
+  **todos** terminan (`_finished`), para que se vea a los rezagados cruzar y
+  parar. Tras la bandera no se disparan mas llamadas al estratega.
+- `race:tick`/`race:end` ahora mandan `done:true` y, para terminados, `gap` =
+  segundos tras el ganador (`FinishGap`).
+
+**Panel Team Radio (`web/overlay.js` + `style.css` + `index.html`).** El feed no
+se auto-borra (es el registro de lo que decidio el estratega, §6.1/§6.2), pero:
+- **Marca de tiempo por linea** (`ahora` / `42s` / `1:05`), refrescada cada
+  segundo por un `setInterval`.
+- **Cabecera** `#radio-age`: `ultima senal: Xs` (o `carrera terminada`) — el
+  silencio se ve de un vistazo.
+- **Colapso de repetidas consecutivas** del mismo auto (mismo texto + estado):
+  no agrega fila, pone un badge `xN` y refresca la hora. Una repetida real se
+  nota; el spam de "staying on plan" de la ultima vuelta no ensucia.
+- `RADIO_MAX` sigue en 6.
+- Banner `#race-over` ("Carrera terminada" + ganador) en `race:end`; `onTick`
+  deja de tocar el lap card tras el fin (no pisa "FINISHED"). Filas terminadas
+  en la tabla: `tr.done` (atenuadas, `pos` -> check).
+
+Typecheck Roslyn Unity 6000.3.22f1: 0 errores. `node --check` en overlay/app/mock.
+El C# necesita rebuild del player (Windows); overlay/css/html se sirven de `/web`
+(`git pull` + refrescar).
