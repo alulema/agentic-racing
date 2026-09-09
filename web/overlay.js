@@ -41,7 +41,7 @@ export function initOverlay() {
         const last = r.lastLap ? r.lastLap.toFixed(1) + "s" : "—";
         return (
           `<tr${me}><td class="pos">${r.pos}</td>` +
-          `<td class="car">${esc(r.name || r.id)}</td>` +
+          `<td class="car">${swatch(carColors.get(r.id))}${esc(r.name || r.id)}</td>` +
           `<td class="gap">${gap}</td>` +
           `<td class="gap">${last}</td>` +
           `<td class="dir">${esc(r.directive || "")}</td></tr>`
@@ -69,7 +69,7 @@ export function initOverlay() {
     if (m.latencyMs) bits.push(m.latencyMs + "ms");
 
     el.innerHTML =
-      `<div class="head"><span class="who">${esc(m.name || m.carId)}</span>` +
+      `<div class="head"><span class="who">${swatch(color)}${esc(m.name || m.carId)}</span>` +
       `<span class="tag ${tagClass}">${esc(tagText)}</span></div>` +
       `<div class="body">${esc(m.radio || "(no radio)")}</div>` +
       (bits.length ? `<div class="meta">${esc(bits.join("  ·  "))}</div>` : "");
@@ -90,4 +90,12 @@ function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])
   );
+}
+
+// A small round colour chip so a car in the 3D view can be matched to its
+// standings row and its team-radio line at a glance. Colour comes from the
+// race:start car list; skipped if unknown.
+function swatch(color) {
+  if (!color) return "";
+  return `<span class="swatch" style="--sw:${esc(color)}"></span>`;
 }

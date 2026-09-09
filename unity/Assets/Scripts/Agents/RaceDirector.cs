@@ -221,6 +221,7 @@ namespace AgenticRacing.Agents
             go.transform.SetParent(transform, false);
             go.transform.localScale = new Vector3(2.0f, 0.8f, 4.2f);
             go.layer = 2; // Ignore Raycast — no ray sensor here, but keep parity
+            TintCar(go, st.Color);   // body colour == HUD swatch == team-radio colour
 
             go.AddComponent<Rigidbody>();
             var car = go.AddComponent<CarController>();
@@ -297,6 +298,28 @@ namespace AgenticRacing.Agents
             TotalLaps = totalLaps,
             Corners = _corners,
         };
+
+        private static Shader _carShader;
+
+        /// <summary>Give the car body its palette colour so it reads the same in
+        /// the 3D view, the HUD standings swatch and the team-radio panel. One
+        /// material per car (they share the cube mesh).</summary>
+        private static void TintCar(GameObject go, string hex)
+        {
+            var mr = go.GetComponent<MeshRenderer>();
+            if (mr == null) return;
+            if (_carShader == null)
+                _carShader = Shader.Find("Universal Render Pipeline/Unlit")
+                             ?? Shader.Find("Unlit/Color")
+                             ?? mr.sharedMaterial.shader;
+
+            if (!ColorUtility.TryParseHtmlString(hex, out var c)) c = Color.gray;
+            var m = new Material(_carShader);
+            if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
+            if (m.HasProperty("_Color")) m.SetColor("_Color", c);
+            m.color = c;
+            mr.sharedMaterial = m;
+        }
 
         private static CornerInfo[] BuildCornerMap(TrackData track)
         {

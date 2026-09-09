@@ -78,6 +78,21 @@ body {
 #standings .dir { text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.04em; }
 #standings tr.me .car { color: var(--color-accent); }
 
+/* Round colour chip: same colour as the car body in the 3D view and the
+   team-radio line, so rows/cars/messages can be matched at a glance. */
+.swatch {
+  display: inline-block;
+  width: 0.62em;
+  height: 0.62em;
+  margin-right: 0.4em;
+  border-radius: 50%;
+  vertical-align: middle;
+  background: var(--sw, var(--color-text-dim));
+  border: 1px solid color-mix(in srgb, var(--color-text) 25%, transparent);
+  flex: none;
+}
+.radio-msg .who .swatch { margin-right: 0.35em; }
+
 /* --- team radio feed -------------------------------------------------- */
 
 #radio {
