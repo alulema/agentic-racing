@@ -2416,3 +2416,16 @@ directo desde `/web`:
    abajo-der con lineas nuevas por evento (verde = LLM, ambar = fallback), y
    `GET /api/ping` cada ~60 s en los logs. Si el overlay carga pero el player no:
    F12 -> consola + `docker compose logs app`.
+
+### Fase 4: colores consistentes auto / HUD / radio (2026-09-09)
+
+Feedback del dueno tras verlo correr en la particion Windows: cuesta seguir que
+auto es cual. Cambios (esteticos):
+- `RaceDirector.TintCar` — el cuerpo de cada auto toma su color de paleta
+  (`Palette[memberIndex]`, el mismo `st.Color` que ya iba al overlay). Necesita
+  rebuild del player (Windows).
+- `web/overlay.js` `swatch()` — circulito redondo del color del auto, delante del
+  nombre en la clasificacion del HUD y en la cabecera de cada linea del Team
+  Radio. Color desde `race:start` (`carColors`); sin cambio de protocolo.
+  Servido desde `/web` -> basta `git pull` en Ubuntu + refrescar.
+- `web/style.css` `.swatch`.
