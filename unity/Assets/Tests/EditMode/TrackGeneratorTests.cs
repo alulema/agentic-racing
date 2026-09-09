@@ -9,6 +9,11 @@ namespace AgenticRacing.Tests
     /// Locks in the Fase 1 acceptance properties of the procedural circuit:
     /// determinism, a closed C1 seam, length in range, no self-intersection,
     /// a navigable tightest corner, and genuine variety across seeds.
+    ///
+    /// Camino A made <see cref="TrackParams.Default"/> a single fixed
+    /// rounded-rectangle circuit (docs/Devlog.md 2026-09-08), so the two tests
+    /// that assert per-seed variety and the deterministic fallback opt back into
+    /// the still-supported procedural path with <c>FixedRoundedRect = false</c>.
     /// </summary>
     public sealed class TrackGeneratorTests
     {
@@ -101,10 +106,12 @@ namespace AgenticRacing.Tests
         [Test]
         public void DistinctSeeds_ProduceDistinctTracks()
         {
+            var p = TrackParams.Default;
+            p.FixedRoundedRect = false;   // variety across seeds is a procedural-path property
             var signatures = new HashSet<string>();
             foreach (int seed in SweepSeeds)
             {
-                TrackData t = TrackGenerator.Generate(seed);
+                TrackData t = TrackGenerator.Generate(seed, p);
                 // Coarse fingerprint: length + a few sampled points.
                 var sig = $"{t.Length:F1}|{Sample(t, 0)}|{Sample(t, 0.25f)}|{Sample(t, 0.5f)}|{Sample(t, 0.75f)}";
                 Assert.IsTrue(signatures.Add(sig), $"seed {seed}: produced a track already seen from another seed");
@@ -114,11 +121,27 @@ namespace AgenticRacing.Tests
         [Test]
         public void Fallback_WhenTriggered_IsDeterministicAndStillValid()
         {
-            // A 22 m minimum corner radius sits above the observed ~13 m floor
-            // (median ~35 m), so a minority of seeds fail on the first attempt
-            // and exercise the deterministic re-derivation path, while a valid
-            // layout stays common enough to be found quickly.
+            // Exercise the deterministic re-derivation path. TrackParams.Default
+            // was softened well below the point where it ever triggers (fixed
+            // circuit since Camino A; and before that, gentler harmonics from
+            // commit 8308531), so restore harmonics aggressive enough — mirroring
+            // the original Fase 1 Default — that a 22 m corner floor sits above
+            // the ~13 m natural floor and a minority of seeds fail on the first
+            // attempt, while a valid layout stays common enough to be found fast.
             var hard = TrackParams.Default;
+            hard.FixedRoundedRect = false;
+            hard.MinControlPoints = 16;
+            hard.MaxControlPoints = 22;
+            hard.MinHarmonics = 2;
+            hard.MaxHarmonics = 3;
+            hard.MaxHarmonicFreq = 5;
+            hard.HarmonicAmpMin = 0.12f;
+            hard.HarmonicAmpMax = 0.30f;
+            hard.RadialJitterMin = -0.05f;
+            hard.RadialJitterMax = 0.05f;
+            hard.RadiusClampMin = 0.45f;
+            hard.RadiusClampMax = 1.75f;
+            hard.AngularJitter = 0.35f;
             hard.MinCornerRadius = 22f;
             hard.MaxAttempts = 128;
 

@@ -2320,3 +2320,41 @@ Typecheck Roslyn Unity 6000.3.22f1 (runtime + Demo + `Fase4RaceScene`): 0 errore
 - Tuning de fisica de contacto auto-auto (cubos ligeros con Y congelada): un
   choque fuerte puede lanzar a un auto; los umbrales de `MaybeSoftRecover` son un
   primer valor, ajustar tras ver la escena en el Editor.
+
+### Fase 4 (parte 2/2) paso 5 (parcial): Editor Linux batchmode — escena + tests (2026-09-08)
+
+El Editor Linux `6000.3.22f1` de la NUC esta activado y corre en batchmode
+(entitlements OK en `Editor.log`). Desde la particion Ubuntu:
+
+- **`Fase4RaceScene.Setup`** (`-batchmode -nographics -quit -executeMethod`):
+  genero `Assets/Scenes/Race.unity` (+ `.meta`). El `-executeMethod` solo corre
+  si el proyecto compila entero -> **el grafo de asmdef quedo validado**
+  (`AgenticRacing.Agents` -> `Strategy` + `Interop` resuelve; 0 errores de
+  compilacion, 0 warnings de asmdef). La escena: objeto `Race` con `TrackConfig`
+  + `RaceSceneBootstrap`.
+- **EditMode: 20/20 verdes** tras arreglar 2 tests que ya estaban rojos desde
+  antes de esta sesion (deuda de Camino A, no de los pasos 1-4):
+  - `TrackGeneratorTests.DistinctSeeds_ProduceDistinctTracks` — asertaba variedad
+    por seed; con `TrackParams.Default.FixedRoundedRect = true` (commit `3b35176`)
+    todos los seeds dan el mismo ovalo. Fix: el test pide la ruta procedural
+    (`FixedRoundedRect = false`).
+  - `TrackGeneratorTests.Fallback_WhenTriggered_IsDeterministicAndStillValid` —
+    esperaba que un piso de 22 m disparara la re-derivacion determinista; el
+    commit `8308531` ("pistas deliberadamente suaves", sesion anterior) ablando
+    los armonicos del Default por debajo de ese punto, asi que `fellBack == 0`.
+    Fix: el test restaura localmente los armonicos agresivos del Default de Fase 1
+    (`5d2ef7a`) para volver a estresar el camino de fallback.
+  Los otros 18 (cierre de bucle, longitud en rango, sin auto-interseccion,
+  determinismo, curva mas cerrada navegable) pasan con el ovalo fijo tal cual.
+- Revertido el churn que el Editor regenera al abrir: reordenamiento de
+  `unity.slnx` y un flip de `scriptingDefineSymbols` (Standalone) en
+  `ProjectSettings.asset` — estado derivado de paquetes, no un cambio intencional.
+
+**Pendiente de paso 5 (necesita GUI o build):**
+- Abrir `Race.unity` en Play y observar parrilla, cuenta de vueltas, encuadre de
+  camara, respawn suave, y —con `docker compose up`— las lineas de radio del
+  estratega.
+- Paso 4 — `Fase4RaceScene.BuildWebGL` y servir contra el proxy para el flujo
+  `race:*` + `radio:msg` end-to-end sin `?mock=1`.
+- Generar los `.meta` que Unity no haya materializado aun de la parte 1/2
+  (`Strategy/`, etc. — al abrir el proyecto en GUI).
