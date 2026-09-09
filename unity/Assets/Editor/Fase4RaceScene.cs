@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using AgenticRacing.Agents;
 using AgenticRacing.Track;
@@ -5,6 +6,7 @@ using UnityEditor;
 using UnityEditor.Build.Reporting;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace AgenticRacing.EditorTools
 {
@@ -29,6 +31,17 @@ namespace AgenticRacing.EditorTools
         private const string ScenePath = "Assets/Scenes/Race.unity";
         private const string OutputDir = "Builds/race-demo";
         private const string WebBuildName = "web-test";   // must match web/app.js BUILD_NAME
+
+        // RaceSceneBootstrap builds its materials at runtime via Shader.Find, so
+        // nothing references these at build time and Unity strips their variants
+        // -> magenta track in the player. Force them into Always Included Shaders
+        // for the build, then restore (same as Fase1WebglBuild).
+        private static readonly string[] ForceIncludeShaders =
+        {
+            "Universal Render Pipeline/Unlit",
+            "Universal Render Pipeline/Lit",
+            "Sprites/Default",
+        };
 
         public static void Setup()
         {
@@ -59,6 +72,7 @@ namespace AgenticRacing.EditorTools
             var prevCompression = PlayerSettings.WebGL.compressionFormat;
             bool prevDataCaching = PlayerSettings.WebGL.dataCaching;
             bool prevRunInBackground = PlayerSettings.runInBackground;
+            List<Shader> addedShaders = null;
 
             BuildReport report;
             try
@@ -67,6 +81,7 @@ namespace AgenticRacing.EditorTools
                 PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Brotli;
                 PlayerSettings.WebGL.dataCaching = false;
                 PlayerSettings.runInBackground = true;
+                addedShaders = AddAlwaysIncludedShaders(ForceIncludeShaders);
 
                 if (Directory.Exists(OutputDir)) Directory.Delete(OutputDir, true);
 
@@ -84,6 +99,7 @@ namespace AgenticRacing.EditorTools
                 PlayerSettings.WebGL.compressionFormat = prevCompression;
                 PlayerSettings.WebGL.dataCaching = prevDataCaching;
                 PlayerSettings.runInBackground = prevRunInBackground;
+                RemoveAlwaysIncludedShaders(addedShaders);
                 AssetDatabase.SaveAssets();
             }
 
@@ -150,6 +166,55 @@ namespace AgenticRacing.EditorTools
                 File.Copy(f, Path.Combine(dst, Path.GetFileName(f)), true);
             foreach (string d in Directory.GetDirectories(src))
                 CopyDir(d, Path.Combine(dst, Path.GetFileName(d)));
+        }
+
+        private static List<Shader> AddAlwaysIncludedShaders(string[] names)
+        {
+            var added = new List<Shader>();
+            var so = new SerializedObject(GraphicsSettings.GetGraphicsSettings());
+            var arr = so.FindProperty("m_AlwaysIncludedShaders");
+
+            foreach (string name in names)
+            {
+                Shader sh = Shader.Find(name);
+                if (sh == null)
+                {
+                    Debug.LogWarning($"[Fase4RaceScene] shader not found, cannot force-include: {name}");
+                    continue;
+                }
+
+                bool present = false;
+                for (int i = 0; i < arr.arraySize; i++)
+                    if (arr.GetArrayElementAtIndex(i).objectReferenceValue == sh) { present = true; break; }
+                if (present) continue;
+
+                arr.arraySize++;
+                arr.GetArrayElementAtIndex(arr.arraySize - 1).objectReferenceValue = sh;
+                added.Add(sh);
+            }
+
+            so.ApplyModifiedProperties();
+            return added;
+        }
+
+        private static void RemoveAlwaysIncludedShaders(List<Shader> shaders)
+        {
+            if (shaders == null || shaders.Count == 0) return;
+
+            var so = new SerializedObject(GraphicsSettings.GetGraphicsSettings());
+            var arr = so.FindProperty("m_AlwaysIncludedShaders");
+
+            for (int i = arr.arraySize - 1; i >= 0; i--)
+            {
+                var prop = arr.GetArrayElementAtIndex(i);
+                if (shaders.Contains(prop.objectReferenceValue as Shader))
+                {
+                    prop.objectReferenceValue = null;   // object-ref arrays: null then delete
+                    arr.DeleteArrayElementAtIndex(i);
+                }
+            }
+
+            so.ApplyModifiedProperties();
         }
     }
 }
