@@ -41,8 +41,10 @@ namespace AgenticRacing.Agents
         [Tooltip("Fixed rounded-rect oval ignores this; kept for parity with the procedural path.")]
         [SerializeField] private int trackSeed = 1;
         [SerializeField, Min(1)] private int totalLaps = 8;
-        [Tooltip("Grid slots (from the front) that run the LLM strategist; the rest run the fixed heuristic (Fase 6.3 mixed field).")]
+        [Tooltip("How many of the six cars carry the LLM strategist this race; the rest run the fixed heuristic (Fase 6.3 mixed field).")]
         [SerializeField, Min(0)] private int llmCars = 3;
+        [Tooltip("Rotates BOTH the grid order and which population members carry the LLM, on different index axes, so a grid-slot advantage can't be mistaken for the strategist's effect (§6.3). The demo shell bumps this per race.")]
+        [SerializeField, Min(0)] private int raceIndex;
         [SerializeField] private bool autoStartOnAwake = true;
 
         [Header("Grid")]
@@ -86,27 +88,63 @@ namespace AgenticRacing.Agents
         /// <summary>Stable <c>car_NN</c> id for a grid slot, or null if out of range.</summary>
         public string CarIdOf(int slot) => (slot >= 0 && slot < _cars.Count) ? _cars[slot].CarId : null;
 
+        /// <summary>The shared circuit (available after <see cref="StartRace"/>, or
+        /// right after <see cref="Configure"/> if one was supplied).</summary>
+        public TrackData Track => _track;
+
+        /// <summary>Grid slot the HUD/camera treat as the viewer's car; -1 for none.</summary>
+        public int FocusCarSlot => focusCarSlot;
+
+        /// <summary>Transform of the car in a grid slot, or null if out of range.</summary>
+        public Transform CarTransform(int slot) =>
+            (slot >= 0 && slot < _cars.Count) ? _cars[slot].Go.transform : null;
+
         private void Awake()
         {
             if (autoStartOnAwake) StartRace();
         }
 
-        /// <summary>Build the track and the grid and start the race. Idempotent.
-        /// A scene bootstrap that wants to set fields first turns off
-        /// <see cref="autoStartOnAwake"/> and calls this.</summary>
+        /// <summary>Scene-bootstrap hook: hand the director a pre-generated track
+        /// (so the visuals and the sim share one <see cref="TrackData"/>) plus the
+        /// race parameters. Call on an inactive object before it activates, or
+        /// before <see cref="StartRace"/>.</summary>
+        public void Configure(TrackData track, int seed, int laps, int race)
+        {
+            _track = track;
+            _trackLen = track != null ? track.Length : 0f;
+            trackSeed = seed;
+            totalLaps = Mathf.Max(1, laps);
+            raceIndex = Mathf.Max(0, race);
+        }
+
+        /// <summary>Build the track (if not already supplied via
+        /// <see cref="Configure"/>) and the grid, and start the race. Idempotent.</summary>
         public void StartRace()
         {
             if (_started) return;
             _started = true;
 
-            _track = TrackGenerator.Generate(trackSeed);
-            _trackLen = _track.Length;
+            if (_track == null)
+            {
+                _track = TrackGenerator.Generate(trackSeed);
+                _trackLen = _track.Length;
+            }
             _corners = BuildCornerMap(_track);
             TrackEdgeColliders.Build(_track, transform);
 
+            // Rotate grid order (over slots) and LLM assignment (over population
+            // members) on separate axes: in race k, slot s holds member (s+k) and
+            // a member m carries the LLM iff (m+k) mod N < llmCars. Every member
+            // then visits every slot and carries the LLM in exactly llmCars of
+            // the N races, decoupled from where it starts (§6.3 methodology).
             var pop = RaceDirective.Population;
-            for (int i = 0; i < pop.Length; i++)
-                _cars.Add(BuildCar(i, pop[i]));
+            int n = pop.Length;
+            for (int slot = 0; slot < n; slot++)
+            {
+                int member = (slot + raceIndex) % n;
+                bool useLlm = (member + raceIndex) % n < Mathf.Clamp(llmCars, 0, n);
+                _cars.Add(BuildCar(slot, member, pop[member], useLlm));
+            }
 
             // Seed classification with grid order so frame 1 fires no spurious
             // PositionChange events.
@@ -120,7 +158,7 @@ namespace AgenticRacing.Agents
             if (emitOverlay) EmitRaceStart();
         }
 
-        /// <summary>Car-vs-car contact (paso 2 wires this from collision events):
+        /// <summary>Car-vs-car contact, called by <see cref="RaceCarContact"/>:
         /// bumps both cars' incident counts and fires an Incident call for each,
         /// so the strategist can react and the bitácora keeps the failures
         /// too (§6.2).</summary>
@@ -142,14 +180,20 @@ namespace AgenticRacing.Agents
 
         // -- grid construction ------------------------------------------------
 
-        private CarState BuildCar(int slot, RaceDirective.PopulationMember member)
+        private CarState BuildCar(int slot, int memberIndex, RaceDirective.PopulationMember member, bool useLlm)
         {
+            // Identity (id, name, colour) follows the population MEMBER, not the
+            // grid slot, so a pilot is the same "car_0N" with the same colour and
+            // profile across races even as its start slot and LLM flag rotate —
+            // the bitácora (§6.1) and the mixed-field comparison (§6.3) track a
+            // stable pilot, not a seat.
             var st = new CarState
             {
                 Slot = slot,
-                CarId = $"car_{slot + 1:00}",
+                MemberIndex = memberIndex,
+                CarId = $"car_{memberIndex + 1:00}",
                 Name = member.Name,
-                Color = Palette[slot % Palette.Length],
+                Color = Palette[memberIndex % Palette.Length],
             };
 
             // Cold build: assemble every ML-Agents component while the object is
@@ -189,10 +233,14 @@ namespace AgenticRacing.Agents
             dr.DecisionPeriod = 5;
             dr.TakeActionsBetweenDecisions = true;
 
+            var contact = go.AddComponent<RaceCarContact>();
+            contact.Slot = slot;
+            contact.Director = this;
+
             var strat = go.AddComponent<RaceStrategist>();
             strat.DisplayName = member.Name;
             strat.ColorHex = st.Color;
-            strat.UseLlm = slot < llmCars;
+            strat.UseLlm = useLlm;
             strat.Context = BuildContext(st, member);
             strat.Map = directiveMap;
 
@@ -470,8 +518,9 @@ namespace AgenticRacing.Agents
 
         private sealed class CarState
         {
-            public int Slot;
-            public string CarId;      // "car_01"
+            public int Slot;          // grid slot this race (rotates)
+            public int MemberIndex;   // RaceDirective.Population index (the stable pilot)
+            public string CarId;      // "car_01" — follows MemberIndex, not Slot
             public string Name;       // population member name
             public string Color;
 
@@ -499,6 +548,35 @@ namespace AgenticRacing.Agents
             public float RivalInRangeSince = -1f;
             public bool RivalRangeArmed = true;
             public readonly Dictionary<int, float> PrevRivalGap = new();
+        }
+    }
+
+    /// <summary>
+    /// One per race car (added by <see cref="RaceDirector.BuildCar"/>). Turns a
+    /// car-to-car physics contact into a single <see cref="RaceDirector.ReportIncident"/>
+    /// call, debounced so the multiple contact points of one bump don't each
+    /// count. Wall contacts are ignored here — <see cref="RaceAgent"/> already
+    /// handles those.
+    /// </summary>
+    public sealed class RaceCarContact : MonoBehaviour
+    {
+        internal int Slot;
+        internal RaceDirector Director;
+
+        private const float ContactCooldownSeconds = 1.5f;
+        private float _muteUntil;
+
+        private void OnCollisionEnter(Collision collision)
+        {
+            if (Director == null || Time.time < _muteUntil) return;
+
+            var rb = collision.collider.attachedRigidbody;
+            var other = rb != null ? rb.GetComponent<RaceCarContact>()
+                                   : collision.collider.GetComponent<RaceCarContact>();
+            if (other == null || other.Slot == Slot) return;
+
+            _muteUntil = other._muteUntil = Time.time + ContactCooldownSeconds;
+            Director.ReportIncident(Slot, other.Slot);
         }
     }
 }

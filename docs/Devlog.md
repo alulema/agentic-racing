@@ -2223,3 +2223,58 @@ formato minimo que los `.meta` que dejo la sesion de Windows). El editar
   correr la escena. Generar/commitear cualquier `.meta` que falte.
 - Sigue pendiente de la parte 1/2: `.meta` de `Strategy/` etc. los genera el
   Editor al abrir (item 1 de la lista anterior).
+
+### Fase 4 (parte 2/2) paso 2: escena Race + colisiones + rotacion (2026-09-08, sesion Ubuntu)
+
+**Escena `Race.unity` (via `Assets/Editor/Fase4RaceScene.cs`).** Mismo patron
+que Fase 1: un solo objeto (`TrackConfig` + `RaceSceneBootstrap`), todo lo demas
+se construye en runtime.
+- `RaceSceneBootstrap.cs` (asmdef `AgenticRacing.Agents`): resuelve seed/laps de
+  la URL (`TrackConfig`) y `?race=N` (parser propio — el de `TrackConfig` es
+  `internal`); genera el ovalo, dibuja superficie + racing line + linea de meta +
+  numeros de curva (T1..Tn), crea el `RaceDirector` (inactivo -> `Configure` ->
+  activar -> `StartRace`), y una camara ortografica top-down que **encuadra el
+  peloton** (centroide + tamano ajustado al spread, clamp [38, 240], suavizado).
+  El HUD/radio siguen 100% en el overlay DOM (§2.2); en pantalla solo pista y
+  autos.
+- `Fase4RaceScene.Setup()` materializa `Assets/Scenes/Race.unity`;
+  `.BuildWebGL()` es un build local sin comprimir para verificar (el pipeline de
+  CI mantiene Brotli + .br/.gz de Fase 0).
+
+**Colisiones auto-auto -> `RaceDirector.ReportIncident` (`RaceCarContact`).**
+Componente nuevo (en `RaceDirector.cs`), uno por auto, anadido en el cold-build.
+`OnCollisionEnter` busca un `RaceCarContact` en el otro collider/rigidbody; si es
+otro auto y no esta en cooldown (1.5 s, compartido entre los dos) llama a
+`ReportIncident(slotA, slotB)` una sola vez por golpe. Los contactos con muro los
+sigue manejando `RaceAgent` (no cuentan como incidente de carrera).
+
+**Rotacion de parrilla y de LLM (§6.3).** `RaceDirector.raceIndex` (settable por
+`Configure` / `?race=N`). En la carrera k: el slot s arranca al miembro
+`(s+k) mod N` de `RaceDirective.Population`, y un miembro m lleva LLM sii
+`(m+k) mod N < llmCars`. Ejes distintos (slots vs miembros) -> la ventaja de
+salida no se confunde con el efecto del estratega; en N carreras cada miembro
+visita cada slot y lleva LLM en exactamente `llmCars` de ellas. La **identidad**
+(`car_0N`, color, perfil de piloto) sigue al **miembro**, no al slot, para que la
+bitacora §6.1 y la comparacion §6.3 sigan a un piloto estable y no a un asiento.
+`RaceDirector.Configure(track, seed, laps, race)` permite que el bootstrap le pase
+el `TrackData` ya generado (visuales y sim comparten uno solo).
+
+**Typecheck (sin Editor):** `csc` de Roslyn de Unity 6000.3.22f1 sobre runtime
+(Track/Vehicle/Interop/Strategy/Agents) + Demo + `Fase4RaceScene.cs` + UnityEditor
+-> **0 errores**. (Los `Fase0*.cs` fallan en este check ad-hoc por falta de
+`System.Diagnostics.Process` en el set de refs improvisado, no por el cambio.)
+
+**`.meta`:** creados a mano (GUID estable, formato minimo) para
+`RaceSceneBootstrap.cs` y `Fase4RaceScene.cs`.
+
+**Pendiente:**
+- Paso 3 — respawn suave / penalizacion de tiempo para un auto que se sale o se
+  enreda (hoy `RaceMode` nunca termina; el auto sigue con la recuperacion de muro
+  de `Heuristic()`, y un choque fuerte lo puede dejar mal encarado sin correccion).
+- Paso 4 — abrir `web/index.html` (sin `?mock=1`) contra un build de la escena y
+  confirmar el flujo `race:*` + `radio:msg` end-to-end contra `docker compose up`.
+- Paso 5 (Editor Linux) — `Fase4RaceScene.Setup` para generar/commitear
+  `Race.unity` + su `.meta`; confirmar compila + tests EditMode verdes; abrir la
+  escena en Play y ver la parrilla, las vueltas, el encuadre de camara y (con el
+  server arriba) las lineas de radio. Generar los `.meta` que falten de la parte
+  1/2 (`Strategy/`, etc.).
