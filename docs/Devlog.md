@@ -2387,3 +2387,32 @@ incompleto), que es justo por lo que CLAUDE.md §2 delega los builds WebGL a
 - Reinstalar el modulo WebGL en el Editor Linux via Unity Hub y reintentar.
 - Smoke test headless en Play mode (verifica sim + telemetria + el JSON exacto
   de `race:*`/`radio:msg` sin build WebGL).
+
+### Fase 4 paso 4: `BuildWebGL` ahora ensambla `/web` (build en Windows) — 2026-09-08
+
+Decidido: cerrar el paso 4 con un build WebGL en la **particion Windows** (el
+modulo WebGL de la NUC Linux esta incompleto). Para que ese build se sirva
+directo desde `/web`:
+
+- `Fase4RaceScene.BuildWebGL` ahora: (a) compila con **Brotli** (como CI, y
+  `server/main.py` ya pone `Content-Encoding: br`); (b) tras un build OK, copia
+  `Builds/race-demo/Build/*` -> `web/Build/` renombrando el prefijo
+  `race-demo.*` -> `web-test.*` (lo que espera `web/app.js` `BUILD_NAME`), y
+  `StreamingAssets/` si existe. Es el equivalente local del paso "Assemble /web"
+  de `build-and-publish.yml`; conserva `web/index.html` (el shell del overlay).
+- `.gitignore`: `/web/Build/`, `/web/TemplateData/`, `/web/StreamingAssets/`
+  (artefacto generado, no fuente).
+
+**Pasos para el humano (Windows -> Ubuntu):**
+1. Windows: `git pull`; luego
+   `"C:\Program Files\Unity\Hub\Editor\6000.3.22f1\Editor\Unity.exe" -batchmode -quit -projectPath "C:\Users\alexi\source\repos\agentic-racing\unity" -executeMethod AgenticRacing.EditorTools.Fase4RaceScene.BuildWebGL -logFile build-race.log`
+   -> revisar `[Fase4RaceScene] BuildWebGL result=Succeeded` y `merged N player files into ...\web\Build`.
+2. Copiar `web\Build\` (y `web\StreamingAssets\` si aparece) del checkout Windows
+   al checkout Ubuntu (`web/Build/`), por scp / carpeta compartida / USB.
+3. Ubuntu: `STATIC_DIR=<repo>/web docker compose up` (o exportar `STATIC_DIR` para
+   el server). Abrir `http://localhost:8080/` **sin** `?mock=1`.
+4. Exito = carga el player Unity (parrilla de 6 autos en el ovalo), HUD arriba-izq
+   con clasificacion que se reordena, chip LLM online, panel "Team radio"
+   abajo-der con lineas nuevas por evento (verde = LLM, ambar = fallback), y
+   `GET /api/ping` cada ~60 s en los logs. Si el overlay carga pero el player no:
+   F12 -> consola + `docker compose logs app`.

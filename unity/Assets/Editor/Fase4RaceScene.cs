@@ -17,14 +17,18 @@ namespace AgenticRacing.EditorTools
     ///     -executeMethod AgenticRacing.EditorTools.Fase4RaceScene.Setup -logFile -
     ///
     /// <see cref="Setup"/> materialises <c>Assets/Scenes/Race.unity</c> (commit it
-    /// and its .meta). <see cref="BuildWebGL"/> is a local, uncompressed
-    /// verification build only — CI's pipeline keeps Brotli and the .br/.gz path
-    /// validated in Fase 0.
+    /// and its .meta). <see cref="BuildWebGL"/> builds that scene for WebGL and
+    /// merges the player into <c>/web</c> next to the DOM-overlay
+    /// <c>index.html</c>, renaming the files to the <c>web-test</c> prefix
+    /// <c>web/app.js</c> expects — a local stand-in for CI's assemble step, so a
+    /// Windows build can be served straight off <c>/web</c> by the FastAPI proxy
+    /// (<c>STATIC_DIR=&lt;repo&gt;/web</c>). Brotli-compressed, like CI.
     /// </summary>
     public static class Fase4RaceScene
     {
         private const string ScenePath = "Assets/Scenes/Race.unity";
         private const string OutputDir = "Builds/race-demo";
+        private const string WebBuildName = "web-test";   // must match web/app.js BUILD_NAME
 
         public static void Setup()
         {
@@ -60,7 +64,7 @@ namespace AgenticRacing.EditorTools
             try
             {
                 PlayerSettings.WebGL.template = "APPLICATION:Default";
-                PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Disabled;
+                PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Brotli;
                 PlayerSettings.WebGL.dataCaching = false;
                 PlayerSettings.runInBackground = true;
 
@@ -87,8 +91,65 @@ namespace AgenticRacing.EditorTools
             Debug.Log($"[Fase4RaceScene] BuildWebGL result={s.result} errors={s.totalErrors} " +
                       $"size={s.totalSize} bytes -> {OutputDir}");
 
+            if (s.result == BuildResult.Succeeded)
+                MergeIntoWeb();
+
             if (Application.isBatchMode)
                 EditorApplication.Exit(s.result == BuildResult.Succeeded ? 0 : 1);
+        }
+
+        /// <summary>
+        /// Copy the player's <c>Build/</c> (and <c>StreamingAssets/</c> if any)
+        /// into <c>&lt;repo&gt;/web/</c>, renaming the <c>&lt;OutputDir name&gt;.*</c>
+        /// prefix to <c>web-test.*</c> so <c>web/app.js</c> loads it as-is. Mirrors
+        /// CI's "Assemble /web static root" step; keeps our own index.html.
+        /// </summary>
+        private static void MergeIntoWeb()
+        {
+            string repo = Directory.GetParent(Application.dataPath)!.Parent!.FullName;
+            string webDir = Path.Combine(repo, "web");
+            string srcBuild = Path.Combine(OutputDir, "Build");
+            string dstBuild = Path.Combine(webDir, "Build");
+
+            if (!Directory.Exists(srcBuild))
+            {
+                Debug.LogWarning($"[Fase4RaceScene] {srcBuild} not found — nothing merged into /web.");
+                return;
+            }
+
+            string srcPrefix = Path.GetFileName(OutputDir);   // "race-demo"
+            if (Directory.Exists(dstBuild)) Directory.Delete(dstBuild, true);
+            Directory.CreateDirectory(dstBuild);
+
+            foreach (string file in Directory.GetFiles(srcBuild))
+            {
+                string name = Path.GetFileName(file);
+                string renamed = name.StartsWith(srcPrefix + ".")
+                    ? WebBuildName + name.Substring(srcPrefix.Length)
+                    : name;
+                File.Copy(file, Path.Combine(dstBuild, renamed), true);
+            }
+
+            string srcStreaming = Path.Combine(OutputDir, "StreamingAssets");
+            if (Directory.Exists(srcStreaming))
+            {
+                string dstStreaming = Path.Combine(webDir, "StreamingAssets");
+                if (Directory.Exists(dstStreaming)) Directory.Delete(dstStreaming, true);
+                CopyDir(srcStreaming, dstStreaming);
+            }
+
+            int n = Directory.GetFiles(dstBuild).Length;
+            Debug.Log($"[Fase4RaceScene] merged {n} player files into {dstBuild} " +
+                      $"(prefix {srcPrefix}.* -> {WebBuildName}.*). Serve with STATIC_DIR={webDir}");
+        }
+
+        private static void CopyDir(string src, string dst)
+        {
+            Directory.CreateDirectory(dst);
+            foreach (string f in Directory.GetFiles(src))
+                File.Copy(f, Path.Combine(dst, Path.GetFileName(f)), true);
+            foreach (string d in Directory.GetDirectories(src))
+                CopyDir(d, Path.Combine(dst, Path.GetFileName(d)));
         }
     }
 }

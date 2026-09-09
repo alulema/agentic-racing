@@ -65,6 +65,12 @@ sysinfo.txt
 /unity/Assets/Scenes/EvalArena.unity.meta
 /unity/Builds/
 
+# Unity WebGL player merged into /web (by CI, or Fase4RaceScene.BuildWebGL for a
+# local Windows build). Generated artifact — never source.
+/web/Build/
+/web/TemplateData/
+/web/StreamingAssets/
+
 # ---- Python (server, training scripts) ----
 __pycache__/
 *.pyc
