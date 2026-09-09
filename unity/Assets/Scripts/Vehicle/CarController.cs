@@ -46,10 +46,10 @@ namespace AgenticRacing.Vehicle
             _rb = GetComponent<Rigidbody>();
             if (config == null) config = VehicleConfig.CreateDefault();
 
-#if UNITY_WEBGL && !UNITY_EDITOR
-            // Route browser keyboard to the canvas even without an explicit click.
-            WebGLInput.captureAllKeyboardInput = true;
-#endif
+            // (Unity 6 removed the WebGLInput class that older builds used here to
+            // force browser keyboard capture onto the canvas. The Fase 4 race is
+            // autonomous — RL pilot + LLM strategist — so no keyboard capture is
+            // needed; manual-drive dev scenes get focus from a canvas click.)
 
             _rb.mass = config.Mass;
             _rb.linearDamping = config.LinearDrag;
