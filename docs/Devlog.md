@@ -2358,3 +2358,32 @@ El Editor Linux `6000.3.22f1` de la NUC esta activado y corre en batchmode
   `race:*` + `radio:msg` end-to-end sin `?mock=1`.
 - Generar los `.meta` que Unity no haya materializado aun de la parte 1/2
   (`Strategy/`, etc. — al abrir el proyecto en GUI).
+
+### Fase 4 paso 4: build WebGL local BLOQUEADO (modulo incompleto) — 2026-09-08
+
+Tres intentos de `Fase4RaceScene.BuildWebGL` en el Editor Linux de la NUC:
+1. Fallo antes de compilar: el backend de build (Bee/ILPP) no encontraba un
+   .NET 8 SDK (solo habia .NET 10). El dueno instalo `dotnet-sdk-8.0`.
+2. Fallo mio: `BuildWebGL()` llamaba a `Setup()`, y `Setup()` hace
+   `EditorApplication.Exit(0)` en batchmode -> el proceso moria antes de
+   `BuildPipeline.BuildPlayer`. Corregido: `Setup()` y `BuildWebGL()` ahora
+   comparten un `WriteScene()` interno sin el `Exit`.
+3. `BuildPlayer` corrio y fallo con `errors=2`:
+   `CarController.cs(51,13): error CS0103: The name 'WebGLInput' does not exist`.
+   Causa: el modulo WebGL de este Editor Linux esta **incompleto** —
+   `PlaybackEngines/WebGLSupport/il2cpp/` no existe y el log dice "Native
+   extension for WebGL target not found", asi que la superficie de API
+   especifica de WebGL (`UnityEngine.WebGLInput`, usado en un `#if UNITY_WEBGL`
+   preexistente de Fase 0) no entra en las referencias del player. **No es un
+   problema del codigo** — ese `#if` compila bien en el WebGL de CI (Fase 0/1
+   ya publicaron WebGL via GameCI).
+
+Conclusion: el build WebGL local no es viable en la NUC Linux (modulo
+incompleto), que es justo por lo que CLAUDE.md §2 delega los builds WebGL a
+**CI/GameCI**. Opciones para cerrar el paso 4:
+- Cablear `Race.unity` en `.github/workflows/build-and-publish.yml` (empaquetado
+  de Fase 5) y dejar que GameCI lo compile.
+- Compilar en la particion Windows (`Fase4RaceScene.BuildWebGL` funciona alli).
+- Reinstalar el modulo WebGL en el Editor Linux via Unity Hub y reintentar.
+- Smoke test headless en Play mode (verifica sim + telemetria + el JSON exacto
+  de `race:*`/`radio:msg` sin build WebGL).

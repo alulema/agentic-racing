@@ -28,6 +28,15 @@ namespace AgenticRacing.EditorTools
 
         public static void Setup()
         {
+            WriteScene();
+            if (Application.isBatchMode) EditorApplication.Exit(0);
+        }
+
+        /// <summary>Create and save the one-object race scene. Kept separate from
+        /// <see cref="Setup"/> so <see cref="BuildWebGL"/> can reuse it without
+        /// the batch-mode <c>EditorApplication.Exit</c> that ends <see cref="Setup"/>.</summary>
+        private static void WriteScene()
+        {
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             var go = new GameObject("Race");
             go.AddComponent<TrackConfig>();
@@ -36,13 +45,11 @@ namespace AgenticRacing.EditorTools
             Directory.CreateDirectory(Path.GetDirectoryName(ScenePath));
             EditorSceneManager.SaveScene(scene, ScenePath);
             Debug.Log($"[Fase4RaceScene] wrote {ScenePath}");
-
-            if (Application.isBatchMode) EditorApplication.Exit(0);
         }
 
         public static void BuildWebGL()
         {
-            Setup();
+            WriteScene();
 
             string prevTemplate = PlayerSettings.WebGL.template;
             var prevCompression = PlayerSettings.WebGL.compressionFormat;
