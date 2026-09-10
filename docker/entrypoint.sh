@@ -11,7 +11,7 @@
 set -e
 
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2:3b}"
-OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:--1}"
+OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:-24h}"
 
 echo "[entrypoint] starting ollama serve..."
 ollama serve &

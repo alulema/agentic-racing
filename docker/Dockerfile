@@ -70,11 +70,12 @@ ENV STATIC_DIR=/app/static
 ENV OLLAMA_HOST=127.0.0.1:11434
 # Pod tuning (CLAUDE.md §5, §6.7, §7). One model, one in-flight request at a
 # time — the proxy already serialises calls (§7.5), so extra Ollama parallelism
-# just fights uvicorn for CPU. keep_alive=-1: never evict the model within the
-# pod's lifetime (~60 min max, §2.2). OLLAMA_NUM_THREAD leaves headroom for
-# uvicorn + the OS — set to (pod vCPU - 1): 3 on a 4-vCPU pod, 1 on a 2-vCPU
-# pod. Overridable at provision time.
-ENV OLLAMA_KEEP_ALIVE=-1 \
+# just fights uvicorn for CPU. keep_alive 24h: past the pod's ~60 min max life
+# (§2.2) so the model never evicts — a plain duration string, since the proxy
+# sends the same value in the request body and Ollama 400s on the string "-1".
+# OLLAMA_NUM_THREAD leaves headroom for uvicorn + the OS — set to (pod vCPU - 1):
+# 3 on a 4-vCPU pod, 1 on a 2-vCPU pod. Overridable at provision time.
+ENV OLLAMA_KEEP_ALIVE=24h \
     OLLAMA_NUM_PARALLEL=1 \
     OLLAMA_MAX_LOADED_MODELS=1 \
     OLLAMA_NUM_THREAD=3

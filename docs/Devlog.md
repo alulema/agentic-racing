@@ -2641,7 +2641,7 @@ suman ~80 MB. El modelo (`/root/.ollama`) 1.9 GB (fijo, §2.5).
   GPU nunca llegan a una capa del runtime.
 
 **Paso 4 — reparto de CPU + keep_alive.** `ENV` en el Dockerfile:
-`OLLAMA_KEEP_ALIVE=-1` (nunca evicta el modelo dentro de la vida del pod, §6.7),
+`OLLAMA_KEEP_ALIVE=24h` (past la vida max del pod, §2.2, para que el modelo no evicte; NO `-1`: el proxy lo manda como string JSON y Ollama da 400 con `"-1"`),
 `OLLAMA_NUM_PARALLEL=1` + `OLLAMA_MAX_LOADED_MODELS=1` (el proxy ya serializa,
 §7.5 — paralelismo extra solo pelea CPU con uvicorn), `OLLAMA_NUM_THREAD=3`
 (= vCPU del pod - 1; **objetivo 4 vCPU / 8 GiB**, el dueno pidio un upgrade
@@ -2655,3 +2655,11 @@ uso, pero su runtime entra al player) y `com.unity.toolchain.win-x86_64-linux`
 `com.unity.sdk.linux-x86_64` + `com.unity.toolchain.linux-x86_64-linux` los
 re-agrega el Editor Linux al abrir (artefactos del modulo Linux Standalone, no
 tocan WebGL) — se dejan. Compila 20/20, EditMode OK.
+
+**Verificacion local de la imagen `fase5`:** `docker build` -> **4.47 GB** (era
+8.29, -46%; el modelo son 2.0 GB de eso). `docker run`: `/api/health` ok,
+`Build/web-test.wasm.br` servido con `Content-Encoding: br`, `ollama list` muestra
+el modelo horneado, `/api/strategy` devuelve directiva valida (~21 s en frio, ~7 s
+caliente, 0 rejected/failed). ENVs de tuning aplicados (`ollama serve` reporta
+`OLLAMA_MAX_LOADED_MODELS:1`, `OLLAMA_NUM_PARALLEL:1`). Bug atrapado en el smoke
+test: `keep_alive` no puede ser el string `"-1"` (Ollama 400) -> `24h`.
