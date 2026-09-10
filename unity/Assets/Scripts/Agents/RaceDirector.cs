@@ -226,7 +226,9 @@ namespace AgenticRacing.Agents
             go.transform.SetParent(transform, false);
             go.transform.localScale = new Vector3(2.0f, 0.8f, 4.2f);
             go.layer = 2; // Ignore Raycast — no ray sensor here, but keep parity
-            TintCar(go, st.Color);   // body colour == HUD swatch == team-radio colour
+            if (!ColorUtility.TryParseHtmlString(st.Color, out var bodyColor)) bodyColor = Color.gray;
+            TintCar(go, bodyColor);   // body colour == HUD swatch == team-radio colour
+            st.HeadingArrow = BuildHeadingArrow(bodyColor);
 
             go.AddComponent<Rigidbody>();
             var car = go.AddComponent<CarController>();
@@ -305,25 +307,59 @@ namespace AgenticRacing.Agents
         };
 
         private static Shader _carShader;
+        private static Mesh _arrowMesh;
 
-        /// <summary>Give the car body its palette colour so it reads the same in
-        /// the 3D view, the HUD standings swatch and the team-radio panel. One
-        /// material per car (they share the cube mesh).</summary>
-        private static void TintCar(GameObject go, string hex)
+        /// <summary>Flat colour material on the unlit URP shader (force-included by
+        /// Fase4RaceScene.BuildWebGL), with a couple of fallbacks for safety.</summary>
+        private static Material CarMaterial(Color c)
         {
-            var mr = go.GetComponent<MeshRenderer>();
-            if (mr == null) return;
             if (_carShader == null)
                 _carShader = Shader.Find("Universal Render Pipeline/Unlit")
                              ?? Shader.Find("Unlit/Color")
-                             ?? mr.sharedMaterial.shader;
-
-            if (!ColorUtility.TryParseHtmlString(hex, out var c)) c = Color.gray;
+                             ?? Shader.Find("Sprites/Default");
             var m = new Material(_carShader);
             if (m.HasProperty("_BaseColor")) m.SetColor("_BaseColor", c);
             if (m.HasProperty("_Color")) m.SetColor("_Color", c);
             m.color = c;
-            mr.sharedMaterial = m;
+            return m;
+        }
+
+        /// <summary>Give the car body its palette colour so it reads the same in
+        /// the 3D view, the HUD standings swatch and the team-radio panel.</summary>
+        private static void TintCar(GameObject go, Color c)
+        {
+            var mr = go.GetComponent<MeshRenderer>();
+            if (mr != null) mr.sharedMaterial = CarMaterial(c);
+        }
+
+        /// <summary>Triangle pointing +Z, flat in XZ, double-sided.</summary>
+        private static Mesh ArrowMesh()
+        {
+            if (_arrowMesh != null) return _arrowMesh;
+            _arrowMesh = new Mesh { name = "CarHeadingArrow" };
+            _arrowMesh.SetVertices(new List<Vector3>
+            {
+                new(0f, 0f, 1.5f), new(-0.95f, 0f, -0.55f), new(0.95f, 0f, -0.55f),
+            });
+            _arrowMesh.SetTriangles(new[] { 0, 1, 2, 0, 2, 1 }, 0);
+            _arrowMesh.RecalculateBounds();
+            return _arrowMesh;
+        }
+
+        /// <summary>A heading arrow that sits above the car so, top-down, you can
+        /// tell which way each car is pointing at a glance (the body alone is a
+        /// symmetric rectangle). Lives in world space and is moved to follow the
+        /// car each tick, so it is not squashed by the body's non-uniform scale.
+        /// Brighter tint of the car colour — also reinforces identity.</summary>
+        private Transform BuildHeadingArrow(Color bodyColor)
+        {
+            var go = new GameObject("Heading");
+            go.transform.SetParent(transform, false);
+            go.AddComponent<MeshFilter>().sharedMesh = ArrowMesh();
+            var mr = go.AddComponent<MeshRenderer>();
+            mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            mr.sharedMaterial = CarMaterial(Color.Lerp(bodyColor, Color.white, 0.55f));
+            return go.transform;
         }
 
         private static CornerInfo[] BuildCornerMap(TrackData track)
@@ -353,6 +389,10 @@ namespace AgenticRacing.Agents
             {
                 st.Progress.Update(st.Car.transform.position);
                 st.AvgSpeed += (st.Car.ForwardSpeed - st.AvgSpeed) * Mathf.Clamp01(dt / 2f);
+
+                if (st.HeadingArrow != null)
+                    st.HeadingArrow.SetPositionAndRotation(
+                        st.Car.transform.position + Vector3.up * 0.95f, st.Car.transform.rotation);
 
                 float d = st.Progress.Distance01;
                 if (st.CrossArmed && st.PrevDistance01 > 0.7f && d < 0.3f)
@@ -664,6 +704,7 @@ namespace AgenticRacing.Agents
             public RaceAgent Agent;
             public RaceStrategist Strategist;
             public TrackProgress Progress;
+            public Transform HeadingArrow;
 
             public int Crossings;           // forward passes of the s/f line
             public int LapsCompleted;       // == max(0, Crossings - 1)

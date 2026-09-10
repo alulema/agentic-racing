@@ -2496,3 +2496,19 @@ y radio, `.hud-card` a 0.78 / `.radio-msg` a 0.82 de opacidad, `#race-over`
 **Paleta (C#, `RaceDirector.Palette`, necesita rebuild del player):**
 `#86efac` (P6, segundo verde que se confundia con el mint de P1) -> `#fb923c`
 (naranja). Sincroniza cuerpo del auto + swatch + nombre + linea de radio.
+
+### Fase 4: flecha de rumbo sobre cada auto (2026-09-09)
+
+Feedback: al volver de mirar la pantalla unos segundos no se sabe hacia donde
+apunta cada auto (el cuerpo es un rectangulo simetrico visto desde arriba). Un
+F1 desde arriba tampoco ayuda (es casi una linea). Solucion top-down clasica:
+un **triangulo plano** sobre cada auto apuntando hacia adelante.
+- `RaceDirector.BuildHeadingArrow` + `ArrowMesh` (3 verts, doble cara). Vive en
+  espacio-mundo (hijo del `RaceDirector`, no del cubo con escala no uniforme) y
+  se mueve a seguir al auto cada tick (`SetPositionAndRotation`, +0.95 m en Y).
+- Color = `Lerp(colorAuto, blanco, 0.55)` — mas claro que el cuerpo, refuerza la
+  identidad.
+- Refactor: `CarMaterial(Color)` como unico punto que crea el material unlit;
+  `TintCar` ahora toma `Color` (parseado una vez en `BuildCar`).
+Necesita rebuild del player (Windows) — junto con la paleta P6 naranja de
+`9cf0e60`.
