@@ -2590,3 +2590,38 @@ falta de `checks:write` en el token — arreglado en `51413f0`.
 **PR**: la rama `fase-2-rl-agente` (PR #3) cargo Fase 2 (camino A), Fase 3 Lite y
 Fase 4 en un hilo — el camino A fusiono 2+3. Se reescribe el cuerpo del PR para
 reflejarlo y se saca de draft para merge a `main`.
+
+---
+
+## Fase 5 — Empaquetado y control de carga
+
+### Paso 1: el build de CI compila el demo real (2026-09-10)
+
+Hasta ahora `build-and-publish.yml` compilaba lo que hubiera en
+`EditorBuildSettings` — que era **solo `SampleScene.unity`** (escena vacia). La
+imagen de GHCR servia una escena vacia desde Fase 0. Ahora:
+
+- `EditorBuildSettings.asset`: la escena habilitada pasa a
+  **`Assets/Scenes/Race.unity`** (el demo de Fase 4).
+- `ProjectSettings.asset`: `webGLCompressionFormat: 0 -> 2` (**Brotli**
+  permanente; `server/main.py` ya pone `Content-Encoding: br`, `stripEngineCode`
+  ya estaba en 1). Asi el `game-ci/unity-builder` generico (sin `buildMethod`)
+  produce el build de produccion sin codigo extra.
+- `GraphicsSettings.asset`: **URP/Unlit + URP/Lit** anadidos a
+  `m_AlwaysIncludedShaders` (`RaceSceneBootstrap`/`RaceDirector` crean materiales
+  con `Shader.Find` en runtime -> se stripean -> pista/autos magenta). El
+  add/remove por-build de `Fase4RaceScene`/`Fase1WebglBuild` queda redundante
+  para el build de CI (se deja para el path manual de Windows).
+- Workflow `build-webgl`: `buildName: web-test` -> los archivos del player salen
+  `web-test.*`, que es lo que `web/app.js` (`BUILD_NAME`) carga; el paso
+  "Assemble /web" copia `Build/` tal cual (sin renombrar) y ahora falla ruidoso
+  si no aparece `web-test.loader.js`, y escribe el tamano del build al
+  `$GITHUB_STEP_SUMMARY`.
+- `.dockerignore` nuevo: el contexto de `docker build` era todo el repo
+  (`unity/Library` son GB). Ahora solo `server/` + `web/` (incl. el `web/Build/`
+  que CI ensambla) + `docker/`. Excluye `server/tests/` y
+  `requirements-dev.txt` (no se horneaban a proposito).
+
+Validado en el Editor Linux batchmode (`Fase4RaceScene.Setup`): los 3 `.asset`
+parsean, el proyecto compila. El build WebGL real lo verifica CI (el modulo
+WebGL de la NUC Linux esta incompleto, no se puede local).

@@ -1,0 +1,28 @@
+# The final image only needs server/, web/ (incl. the CI-assembled web/Build/)
+# and docker/entrypoint.sh. Keep the build context tiny — unity/Library alone is
+# gigabytes.
+.git
+.github
+.gitignore
+
+unity/
+training/
+models/
+docs/
+*.md
+compose.yaml
+DEMO_INTEGRATION.md
+
+# python / editor cruft
+**/__pycache__/
+**/*.pyc
+.venv/
+.mypy_cache/
+.pytest_cache/
+
+# test-only server files — not shipped
+server/tests/
+server/requirements-dev.txt
+
+# NOTE: web/Build, web/TemplateData, web/StreamingAssets are NOT ignored —
+# CI assembles the Unity player into them right before `docker build`.
