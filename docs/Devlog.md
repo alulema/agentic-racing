@@ -2625,3 +2625,33 @@ imagen de GHCR servia una escena vacia desde Fase 0. Ahora:
 Validado en el Editor Linux batchmode (`Fase4RaceScene.Setup`): los 3 `.asset`
 parsean, el proyecto compila. El build WebGL real lo verifica CI (el modulo
 WebGL de la NUC Linux esta incompleto, no se puede local).
+
+### Pasos 2-4: imagen multi-stage + tuning del pod (2026-09-10)
+
+**Paso 3 — tamano de imagen (~8.3 GB -> ~2.4 GB objetivo).** Inspeccionada la
+imagen `fase0`: `/usr/local/lib/ollama` pesa 2.1 GB, de los cuales `cuda_v12`
+(1.2 GB) + `cuda_v13` (807 MB) + `vulkan` (51 MB) son runtimes GPU que el pod
+CPU-only no toca. Las libs CPU (`libggml-cpu-*.so`, `libllama*.so`, `libgomp`)
+suman ~80 MB. El modelo (`/root/.ollama`) 1.9 GB (fijo, §2.5).
+`docker/Dockerfile` pasa a **multi-stage**:
+- stage `ollama-build`: instala Ollama, hornea el modelo, y `rm -rf` de
+  `cuda_v* rocm* vulkan`.
+- stage final: `COPY --from` del binario + las libs CPU + `/root/.ollama`; solo
+  `curl ca-certificates` (sin `zstd`, era para el instalador). Asi los 2 GB de
+  GPU nunca llegan a una capa del runtime.
+
+**Paso 4 — reparto de CPU + keep_alive.** `ENV` en el Dockerfile:
+`OLLAMA_KEEP_ALIVE=-1` (nunca evicta el modelo dentro de la vida del pod, §6.7),
+`OLLAMA_NUM_PARALLEL=1` + `OLLAMA_MAX_LOADED_MODELS=1` (el proxy ya serializa,
+§7.5 — paralelismo extra solo pelea CPU con uvicorn), `OLLAMA_NUM_THREAD=3`
+(= vCPU del pod - 1; **objetivo 4 vCPU / 8 GiB**, el dueno pidio un upgrade
+request — ajustable en provision). `entrypoint.sh` y `main.py` toman
+`OLLAMA_KEEP_ALIVE` del env (default `-1`).
+
+**Paso 2 — build WebGL.** Brotli ya estaba (paso 1). Quitados de
+`manifest.json`: `com.unity.visualscripting` (bloat del template URP-blank, sin
+uso, pero su runtime entra al player) y `com.unity.toolchain.win-x86_64-linux`
+(cross-compile win->linux del player de entrenamiento Linux abandonado).
+`com.unity.sdk.linux-x86_64` + `com.unity.toolchain.linux-x86_64-linux` los
+re-agrega el Editor Linux al abrir (artefactos del modulo Linux Standalone, no
+tocan WebGL) — se dejan. Compila 20/20, EditMode OK.

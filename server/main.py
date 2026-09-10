@@ -54,7 +54,8 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 # Keep the model resident for the whole session so no call pays a reload and
 # the KV-cache of each car's prefix survives between events (§6.7, §7.4).
-OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "25m")
+# -1 = never evict within the pod's lifetime (the Dockerfile sets this too).
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "-1")
 # Timeout (§6.8): on expiry the client keeps its current directive. Sized for a
 # CPU-only 3B — a schema-free JSON generation still runs ~20-30 s on a small box.
 STRATEGY_TIMEOUT_S = float(os.environ.get("STRATEGY_TIMEOUT_S", "45"))
