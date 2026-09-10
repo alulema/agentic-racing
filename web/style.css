@@ -58,7 +58,7 @@ body {
 }
 
 .hud-card {
-  background: color-mix(in srgb, var(--color-bg-card) 88%, transparent);
+  background: color-mix(in srgb, var(--color-bg-card) 78%, transparent);
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
   padding: 0.5rem 0.7rem;
@@ -73,10 +73,11 @@ body {
 #standings table { border-collapse: collapse; width: 100%; }
 #standings td { padding: 0.1rem 0.35rem; white-space: nowrap; }
 #standings .pos { color: var(--color-text-dim, #9aa); text-align: right; width: 1.4em; }
-#standings .car { font-weight: 600; }
+#standings .car { font-weight: 600; color: var(--car, inherit); }
 #standings .gap { text-align: right; color: var(--color-text-dim, #9aa); }
 #standings .dir { text-transform: uppercase; font-size: 0.68rem; letter-spacing: 0.04em; }
-#standings tr.me .car { color: var(--color-accent); }
+#standings tr.me { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+#standings tr.me .car { font-weight: 800; }
 #standings tr.done { opacity: 0.62; }
 #standings tr.done .pos { color: var(--color-accent); }
 
@@ -127,7 +128,7 @@ body {
 #radio-age:empty { display: none; }
 
 .radio-msg {
-  background: color-mix(in srgb, var(--color-bg-card) 92%, transparent);
+  background: color-mix(in srgb, var(--color-bg-card) 82%, transparent);
   border: 1px solid var(--color-border);
   border-left: 3px solid var(--car-color, var(--color-accent));
   border-radius: var(--radius);

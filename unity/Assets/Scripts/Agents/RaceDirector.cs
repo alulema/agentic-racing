@@ -78,9 +78,11 @@ namespace AgenticRacing.Agents
         [SerializeField] private int focusCarSlot = 0;
         [SerializeField] private float tickInterval = 0.2f;
 
-        // One HUD/radio colour per population member.
+        // One HUD/radio/body colour per population member — six well-separated
+        // hues (mint, salmon, sky, yellow, lavender, orange). P6 was a second
+        // green (#86efac) that read the same as P1's mint; now orange.
         private static readonly string[] Palette =
-        { "#6ee7b7", "#fca5a5", "#93c5fd", "#fcd34d", "#c4b5fd", "#86efac" };
+        { "#6ee7b7", "#fca5a5", "#93c5fd", "#fcd34d", "#c4b5fd", "#fb923c" };
 
         private TrackData _track;
         private float _trackLen;

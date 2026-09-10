@@ -24,7 +24,13 @@ export function initOverlay() {
   const raceOver = document.getElementById("race-over");
   const waiting = document.getElementById("waiting");
   const carColors = new Map();
+  const carNames = new Map();
   let finished = false;
+
+  // The strategist refers to rivals by their protocol id ("car_02"); show the
+  // pilot name the viewer actually sees on the car and in the standings.
+  const humanize = (s) =>
+    String(s == null ? "" : s).replace(/\bcar_\d+\b/gi, (id) => carNames.get(id.toLowerCase()) || id);
 
   // The feed never auto-clears (it's the record of what the strategist decided),
   // but a line from 30 s ago must not look like one from 1 s ago — tick the age
@@ -50,7 +56,11 @@ export function initOverlay() {
     hud.style.visibility = "visible";
     finished = false;
     if (raceOver) raceOver.classList.remove("show");
-    (m.cars || []).forEach((c) => carColors.set(c.id, c.color || null));
+    carNames.clear();
+    (m.cars || []).forEach((c) => {
+      carColors.set(c.id, c.color || null);
+      if (c.name) carNames.set(String(c.id).toLowerCase(), c.name);
+    });
     lapCard.textContent = `LAP 1 / ${m.laps ?? "?"}`;
     standings.innerHTML = "";
     radio.innerHTML = "";
@@ -67,9 +77,11 @@ export function initOverlay() {
         const rowCls = cls.length ? ` class="${cls.join(" ")}"` : "";
         const gap = r.pos === 1 ? "leader" : r.gap != null ? `+${r.gap.toFixed(1)}` : "";
         const last = r.lastLap ? r.lastLap.toFixed(1) + "s" : "—";
+        const c = carColors.get(r.id);
+        const carStyle = c ? ` style="--car:${esc(c)}"` : "";
         return (
           `<tr${rowCls}><td class="pos">${r.done ? "✓" : r.pos}</td>` +
-          `<td class="car">${swatch(carColors.get(r.id))}${esc(r.name || r.id)}</td>` +
+          `<td class="car"${carStyle}>${swatch(c)}${esc(r.name || r.id)}</td>` +
           `<td class="gap">${gap}</td>` +
           `<td class="gap">${last}</td>` +
           `<td class="dir">${esc(r.directive || "")}</td></tr>`
@@ -107,7 +119,7 @@ export function initOverlay() {
     if (m.directive) bits.push(m.directive.toUpperCase());
     if (m.aggression) bits.push("agg:" + m.aggression);
     if (m.risk) bits.push("risk:" + m.risk);
-    if (m.targetRival) bits.push("→ " + m.targetRival);
+    if (m.targetRival) bits.push("→ " + humanize(m.targetRival));
     if (m.focusCorners && m.focusCorners.length) bits.push("T" + m.focusCorners.join(",T"));
     if (m.latencyMs) bits.push(m.latencyMs + "ms");
 
@@ -124,7 +136,7 @@ export function initOverlay() {
       `<span class="count"></span></span>` +
       `<span class="head-r"><span class="tag ${status}">${esc(tagText)}</span>` +
       `<span class="age"></span></span></div>` +
-      `<div class="body">${esc(body)}</div>` +
+      `<div class="body">${esc(humanize(body))}</div>` +
       (bits.length ? `<div class="meta">${esc(bits.join("  ·  "))}</div>` : "");
 
     radio.prepend(el);

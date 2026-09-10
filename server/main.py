@@ -205,6 +205,12 @@ def _resolve_content_type(inner_name: str) -> str:
     return guessed or "application/octet-stream"
 
 
+# The shell (index.html, app.js, overlay.js, style.css) is tiny and changes
+# often; the browser must not serve a stale ES module after a redeploy. The big
+# Unity Build/*.br assets are effectively immutable per build, so let them cache.
+_NO_CACHE_SUFFIXES = {".html", ".js", ".css"}
+
+
 def _serve(file_path: Path) -> FileResponse:
     headers: dict[str, str] = {}
     content_type_source = file_path.name
@@ -213,6 +219,9 @@ def _serve(file_path: Path) -> FileResponse:
     if encoding:
         headers["Content-Encoding"] = encoding
         content_type_source = file_path.name[: -len(file_path.suffix)]
+
+    if file_path.suffix in _NO_CACHE_SUFFIXES:
+        headers["Cache-Control"] = "no-cache"
 
     content_type = _resolve_content_type(content_type_source)
     return FileResponse(file_path, media_type=content_type, headers=headers)
