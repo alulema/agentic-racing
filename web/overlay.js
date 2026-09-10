@@ -27,10 +27,14 @@ export function initOverlay() {
   const carNames = new Map();
   let finished = false;
 
-  // The strategist refers to rivals by their protocol id ("car_02"); show the
-  // pilot name the viewer actually sees on the car and in the standings.
+  // The strategist names rivals in free text as "car_02", but also "Car 2",
+  // "car 04", "rival 1"… — map any of those to the pilot name the viewer sees
+  // on the car and in the standings. Unknown numbers are left untouched.
   const humanize = (s) =>
-    String(s == null ? "" : s).replace(/\bcar_\d+\b/gi, (id) => carNames.get(id.toLowerCase()) || id);
+    String(s == null ? "" : s).replace(
+      /\b(?:car|rival)[\s_-]?0*(\d{1,2})\b/gi,
+      (m, n) => carNames.get("car_" + n.padStart(2, "0")) || m
+    );
 
   // The feed never auto-clears (it's the record of what the strategist decided),
   // but a line from 30 s ago must not look like one from 1 s ago — tick the age

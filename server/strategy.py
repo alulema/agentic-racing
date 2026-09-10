@@ -15,6 +15,8 @@ field, §6.8) and the caller falls back to the current directive.
 
 from __future__ import annotations
 
+import json
+import re
 import time
 
 import httpx
@@ -36,16 +38,28 @@ your own notes from earlier laps — but nothing frame-by-frame and nothing abou
 the next few seconds. You cannot drive the car. Your only output is a strategy \
 directive that biases how your driver drives.
 
-Rules:
-- Reply with ONE JSON object matching the schema. No prose outside it.
-- directive: attack (find a way past), defend (protect position), conserve \
-(consistency, tyre/energy), push (maximum clean pace).
-- aggression / risk_tolerance: exactly one of low, medium, high.
-- target_rival: a car_id from the telemetry, or null.
-- focus_corners: up to 4 corner numbers from the circuit map, or [].
+Reply with ONE JSON object and nothing else. It MUST have ALL SEVEN keys:
+  directive, aggression, risk_tolerance, target_rival, focus_corners, radio, rationale
+
+- directive: one of attack (find a way past), defend (protect position), \
+conserve (consistency, tyre/energy), push (maximum clean pace).
+- aggression: one of low, medium, high.
+- risk_tolerance: one of low, medium, high. REQUIRED — never omit it.
+- target_rival: a car_id string from the telemetry (e.g. "car_03"), or null.
+- focus_corners: a JSON array of plain integers, e.g. [3, 7] — NOT ["T3","T7"]. \
+Use [] if none. Max 4.
 - radio: max 15 words, plain, like a real team-radio call.
 - rationale: max 40 words, why this call now. Not shown live; logged.
-- Base the call on the situation. Early laps with a big gap behind: usually \
+- In radio and rationale, name other cars by their exact car_id from the \
+telemetry (e.g. car_05) — not "Car 5", "the rival", or "Rival 1".
+
+Example of the exact shape (values are illustrative):
+{"directive":"attack","aggression":"high","risk_tolerance":"medium",\
+"target_rival":"car_03","focus_corners":[4,7],\
+"radio":"Car ahead is slow in 4 — have a look on the exit.",\
+"rationale":"Held within a second for two laps and quicker on the straight; a move at turn 4 is on."}
+
+Base the call on the situation. Early laps with a big gap behind: usually \
 conserve or push. A rival within ~1s for more than a lap: attack or defend. \
 Last lap: commit."""
 
@@ -94,16 +108,19 @@ async def call_ollama(
     messages: list[dict],
     timeout_s: float,
 ) -> tuple[str, float]:
-    """One ``/api/chat`` call with forced JSON-schema output. Returns
+    """One ``/api/chat`` call with forced-JSON output. Returns
     ``(content, latency_ms)``. Raises :class:`OllamaError` on transport failure."""
 
     payload = {
         "model": model,
         "messages": messages,
         "stream": False,
-        # Passing the JSON Schema (not just format="json") constrains the 3B
-        # model to the enums and keys we need (§6.8).
-        "format": StrategyResponse.model_json_schema(),
+        # format="json" only (not the full JSON Schema): schema-constrained
+        # decoding roughly doubles latency on a CPU-only 3B. The prompt already
+        # spells out every field and enum, and parse_response validates the
+        # reply against the schema — a bad one is discarded whole (§6.8). Expect
+        # a somewhat higher discard rate; that is the trade §2.5/§6.8 anticipate.
+        "format": "json",
         "options": {"num_predict": NUM_PREDICT, "temperature": TEMPERATURE},
         "keep_alive": keep_alive,
     }
@@ -120,12 +137,46 @@ async def call_ollama(
     return content, latency_ms
 
 
+_CORNER_INT = re.compile(r"-?\d+")
+
+
+def _normalise(raw: dict) -> dict:
+    """Tolerate cosmetic noise a small model adds without changing meaning:
+    ``focus_corners`` given as ["T3", "turn 7"] instead of [3, 7]. Anything that
+    still doesn't fit the schema (missing key, bad enum) is left to fail
+    validation and be discarded whole (§6.8)."""
+
+    fc = raw.get("focus_corners")
+    if isinstance(fc, list):
+        out: list[int] = []
+        for item in fc:
+            m = _CORNER_INT.search(str(item))
+            if m:
+                out.append(int(m.group()))
+        raw["focus_corners"] = out
+    return raw
+
+
 def parse_response(content: str, known_car_ids: set[str]) -> StrategyResponse:
     """Validate a model reply against the schema. Raises
     :class:`pydantic.ValidationError` on any problem — unknown enum, missing
     field, or a ``target_rival`` that is not a car in this race (§6.8)."""
 
-    obj = StrategyResponse.model_validate_json(content)
+    try:
+        raw = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValidationError.from_exception_data(
+            "StrategyResponse",
+            [{"type": "value_error", "loc": ("__root__",), "input": content[:200],
+              "ctx": {"error": f"not JSON: {exc}"}}],
+        ) from exc
+    if not isinstance(raw, dict):
+        raise ValidationError.from_exception_data(
+            "StrategyResponse",
+            [{"type": "value_error", "loc": ("__root__",), "input": str(raw)[:200],
+              "ctx": {"error": "not a JSON object"}}],
+        )
+    obj = StrategyResponse.model_validate(_normalise(raw))
     if obj.target_rival is not None and obj.target_rival not in known_car_ids:
         raise ValidationError.from_exception_data(
             "StrategyResponse",

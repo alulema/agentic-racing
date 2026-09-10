@@ -55,16 +55,26 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 # Keep the model resident for the whole session so no call pays a reload and
 # the KV-cache of each car's prefix survives between events (§6.7, §7.4).
 OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "25m")
-# Short timeout (§6.8): on expiry the client keeps its current directive.
-STRATEGY_TIMEOUT_S = float(os.environ.get("STRATEGY_TIMEOUT_S", "30"))
+# Timeout (§6.8): on expiry the client keeps its current directive. Sized for a
+# CPU-only 3B — a schema-free JSON generation still runs ~20-30 s on a small box.
+STRATEGY_TIMEOUT_S = float(os.environ.get("STRATEGY_TIMEOUT_S", "45"))
 # §7.5: at most this many calls reach Ollama at once (1-2 on a CPU-only pod).
 MAX_CONCURRENT = int(os.environ.get("STRATEGY_MAX_CONCURRENT", "1"))
+# Circuit breaker (§7.1). The p95 threshold has to sit above the model's real
+# latency on the target box, or a working-but-slow LLM is stuck "offline"; the
+# radio just lags the race by that much (§2.5 accepts this).
+BREAKER_P95_MS = int(os.environ.get("STRATEGY_BREAKER_P95_MS", "35000"))
+BREAKER_COOLDOWN_S = float(os.environ.get("STRATEGY_BREAKER_COOLDOWN_S", "60"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.http = httpx.AsyncClient()
-    app.state.guard = GuardrailState(max_concurrent=MAX_CONCURRENT)
+    app.state.guard = GuardrailState(
+        max_concurrent=MAX_CONCURRENT,
+        breaker_p95_ms=BREAKER_P95_MS,
+        breaker_cooldown_s=BREAKER_COOLDOWN_S,
+    )
     app.state.ollama_probe = (0.0, False)  # (checked_at, reachable) — cached
     try:
         yield

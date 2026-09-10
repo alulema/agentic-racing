@@ -2512,3 +2512,33 @@ un **triangulo plano** sobre cada auto apuntando hacia adelante.
   `TintCar` ahora toma `Color` (parseado una vez en `BuildCar`).
 Necesita rebuild del player (Windows) — junto con la paleta P6 naranja de
 `9cf0e60`.
+
+### Fase 4: el LLM se quedaba "offline" — breaker + format + parsing (2026-09-09)
+
+Sintoma (dueno): el chip de estado marcaba "LLM offline" casi todo el tiempo.
+Causa: el cortacircuitos (§7.1) abre con p95 > 20 s y `llama3.2:3b` en CPU tardaba
+**~27 s** por llamada (decode restringido por el JSON Schema completo pasado como
+`format`). Entra 1-2 llamadas, p95 > 20 s, offline 60 s, reintenta, sigue lento,
+reabre. Estado estable = casi siempre offline.
+
+Cambios (todo servidor + overlay, sin rebuild del player). Probado en Chrome:
+carrera de 3+ vueltas, chip **online** estable, `rejected 0 / failed 0`,
+p95 ~22 s, lineas reales del estratega con tag verde.
+
+- `main.py`: `STRATEGY_TIMEOUT_S` 30 -> 45; nuevos env
+  `STRATEGY_BREAKER_P95_MS` (35000) y `STRATEGY_BREAKER_COOLDOWN_S` (60),
+  pasados a `GuardrailState`. El umbral tiene que estar por encima de la latencia
+  real del modelo en la caja objetivo o un LLM lento-pero-vivo queda atrapado
+  offline (§2.5 acepta que el radio vaya desfasado).
+- `strategy.py`: `format` pasa del JSON Schema completo a `"json"` a secas
+  (decode sin gramatica ~3x mas rapido en CPU: ~27 s -> ~7-9 s). Con eso solo, el
+  3B se saltaba `risk_tolerance` y ponia `focus_corners: ["T3"]` -> 100%
+  descartado, asi que ademas:
+  - `_SYSTEM_RULES`: un **ejemplo explicito** del objeto JSON (los modelos chicos
+    copian ejemplos) + "nombra a los otros autos por su car_id exacto".
+  - `parse_response`: `json.loads` primero + `_normalise()` que convierte
+    `focus_corners` `["T3","turn 7"]` -> `[3, 7]` (tolerancia de formato, no
+    parcheo semantico §6.8; lo que sigue sin encajar se descarta entero).
+- `web/overlay.js`: `humanize()` ahora caza `car_02`, `Car 2`, `car 04`,
+  `rival 1`… (antes solo `car_NN` exacto) -> nombre de piloto. El `format:"json"`
+  suelto deja al modelo parafrasear los ids en el texto libre.
