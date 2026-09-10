@@ -53,8 +53,11 @@ EXTRA_CONTENT_TYPES = {
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 # Keep the model resident for the whole session so no call pays a reload and
-# the KV-cache of each car's prefix survives between events (§6.7, §7.4).
-OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "25m")
+# the KV-cache of each car's prefix survives between events (§6.7, §7.4). "24h"
+# is well past the pod's ~60 min max life (§2.2) — NOT "-1": call_ollama sends
+# this in the request body as a JSON string, and Ollama 400s on the string
+# "-1" (it only accepts -1 as a bare number, or a duration like "5m").
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "24h")
 # Timeout (§6.8): on expiry the client keeps its current directive. Sized for a
 # CPU-only 3B — a schema-free JSON generation still runs ~20-30 s on a small box.
 STRATEGY_TIMEOUT_S = float(os.environ.get("STRATEGY_TIMEOUT_S", "45"))

@@ -11,6 +11,7 @@
 set -e
 
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.2:3b}"
+OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:-24h}"
 
 echo "[entrypoint] starting ollama serve..."
 ollama serve &
@@ -28,9 +29,9 @@ done
 echo "[entrypoint] ollama ready."
 
 # Warm the model so the first real request isn't the one that pays the load
-# cost. keep_alive matches what /api/strategy sends.
+# cost. keep_alive matches what /api/strategy sends (OLLAMA_KEEP_ALIVE).
 curl -sf http://127.0.0.1:11434/api/chat \
-    -d "{\"model\":\"${OLLAMA_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"stream\":false,\"keep_alive\":\"30m\"}" \
+    -d "{\"model\":\"${OLLAMA_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"stream\":false,\"keep_alive\":\"${OLLAMA_KEEP_ALIVE}\"}" \
     >/dev/null 2>&1 || echo "[entrypoint] model warm-up call failed (non-fatal)" >&2
 
 echo "[entrypoint] starting uvicorn on 0.0.0.0:8080..."

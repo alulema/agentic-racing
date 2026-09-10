@@ -2590,3 +2590,102 @@ falta de `checks:write` en el token — arreglado en `51413f0`.
 **PR**: la rama `fase-2-rl-agente` (PR #3) cargo Fase 2 (camino A), Fase 3 Lite y
 Fase 4 en un hilo — el camino A fusiono 2+3. Se reescribe el cuerpo del PR para
 reflejarlo y se saca de draft para merge a `main`.
+
+---
+
+## Fase 5 — Empaquetado y control de carga
+
+### Paso 1: el build de CI compila el demo real (2026-09-10)
+
+Hasta ahora `build-and-publish.yml` compilaba lo que hubiera en
+`EditorBuildSettings` — que era **solo `SampleScene.unity`** (escena vacia). La
+imagen de GHCR servia una escena vacia desde Fase 0. Ahora:
+
+- `EditorBuildSettings.asset`: la escena habilitada pasa a
+  **`Assets/Scenes/Race.unity`** (el demo de Fase 4).
+- `ProjectSettings.asset`: `webGLCompressionFormat: 0 -> 2` (**Brotli**
+  permanente; `server/main.py` ya pone `Content-Encoding: br`, `stripEngineCode`
+  ya estaba en 1). Asi el `game-ci/unity-builder` generico (sin `buildMethod`)
+  produce el build de produccion sin codigo extra.
+- `GraphicsSettings.asset`: **URP/Unlit + URP/Lit** anadidos a
+  `m_AlwaysIncludedShaders` (`RaceSceneBootstrap`/`RaceDirector` crean materiales
+  con `Shader.Find` en runtime -> se stripean -> pista/autos magenta). El
+  add/remove por-build de `Fase4RaceScene`/`Fase1WebglBuild` queda redundante
+  para el build de CI (se deja para el path manual de Windows).
+- Workflow `build-webgl`: `buildName: web-test` -> los archivos del player salen
+  `web-test.*`, que es lo que `web/app.js` (`BUILD_NAME`) carga; el paso
+  "Assemble /web" copia `Build/` tal cual (sin renombrar) y ahora falla ruidoso
+  si no aparece `web-test.loader.js`, y escribe el tamano del build al
+  `$GITHUB_STEP_SUMMARY`.
+- `.dockerignore` nuevo: el contexto de `docker build` era todo el repo
+  (`unity/Library` son GB). Ahora solo `server/` + `web/` (incl. el `web/Build/`
+  que CI ensambla) + `docker/`. Excluye `server/tests/` y
+  `requirements-dev.txt` (no se horneaban a proposito).
+
+Validado en el Editor Linux batchmode (`Fase4RaceScene.Setup`): los 3 `.asset`
+parsean, el proyecto compila. El build WebGL real lo verifica CI (el modulo
+WebGL de la NUC Linux esta incompleto, no se puede local).
+
+### Pasos 2-4: imagen multi-stage + tuning del pod (2026-09-10)
+
+**Paso 3 — tamano de imagen (~8.3 GB -> ~2.4 GB objetivo).** Inspeccionada la
+imagen `fase0`: `/usr/local/lib/ollama` pesa 2.1 GB, de los cuales `cuda_v12`
+(1.2 GB) + `cuda_v13` (807 MB) + `vulkan` (51 MB) son runtimes GPU que el pod
+CPU-only no toca. Las libs CPU (`libggml-cpu-*.so`, `libllama*.so`, `libgomp`)
+suman ~80 MB. El modelo (`/root/.ollama`) 1.9 GB (fijo, §2.5).
+`docker/Dockerfile` pasa a **multi-stage**:
+- stage `ollama-build`: instala Ollama, hornea el modelo, y `rm -rf` de
+  `cuda_v* rocm* vulkan`.
+- stage final: `COPY --from` del binario + las libs CPU + `/root/.ollama`; solo
+  `curl ca-certificates` (sin `zstd`, era para el instalador). Asi los 2 GB de
+  GPU nunca llegan a una capa del runtime.
+
+**Paso 4 — reparto de CPU + keep_alive.** `ENV` en el Dockerfile:
+`OLLAMA_KEEP_ALIVE=24h` (past la vida max del pod, §2.2, para que el modelo no evicte; NO `-1`: el proxy lo manda como string JSON y Ollama da 400 con `"-1"`),
+`OLLAMA_NUM_PARALLEL=1` + `OLLAMA_MAX_LOADED_MODELS=1` (el proxy ya serializa,
+§7.5 — paralelismo extra solo pelea CPU con uvicorn), `OLLAMA_NUM_THREAD=3`
+(= vCPU del pod - 1; **objetivo 4 vCPU / 8 GiB**, el dueno pidio un upgrade
+request — ajustable en provision). `entrypoint.sh` y `main.py` toman
+`OLLAMA_KEEP_ALIVE` del env (default `-1`).
+
+**Paso 2 — build WebGL.** Brotli ya estaba (paso 1). Quitados de
+`manifest.json`: `com.unity.visualscripting` (bloat del template URP-blank, sin
+uso, pero su runtime entra al player) y `com.unity.toolchain.win-x86_64-linux`
+(cross-compile win->linux del player de entrenamiento Linux abandonado).
+`com.unity.sdk.linux-x86_64` + `com.unity.toolchain.linux-x86_64-linux` los
+re-agrega el Editor Linux al abrir (artefactos del modulo Linux Standalone, no
+tocan WebGL) — se dejan. Compila 20/20, EditMode OK.
+
+**Verificacion local de la imagen `fase5`:** `docker build` -> **4.47 GB** (era
+8.29, -46%; el modelo son 2.0 GB de eso). `docker run`: `/api/health` ok,
+`Build/web-test.wasm.br` servido con `Content-Encoding: br`, `ollama list` muestra
+el modelo horneado, `/api/strategy` devuelve directiva valida (~21 s en frio, ~7 s
+caliente, 0 rejected/failed). ENVs de tuning aplicados (`ollama serve` reporta
+`OLLAMA_MAX_LOADED_MODELS:1`, `OLLAMA_NUM_PARALLEL:1`). Bug atrapado en el smoke
+test: `keep_alive` no puede ser el string `"-1"` (Ollama 400) -> `24h`.
+
+### Pasos 5-7: guardrails verificados, panel "Acerca de", hand-off (2026-09-10)
+
+**Paso 5 (verificar, ya de Fase 4).** Las 6 capas de §7 confirmadas en
+`server/guardrails.py`/`strategy.py`; `/api/health` + `/api/ping` + el chip
+`#llm-status` (online/offline·p95/down + % rejected) verificados en el smoke test
+de la imagen. Marcados en el checklist §5.
+
+**Paso 6 — `web/demo-info.js`.** `window.DEMO_INFO` propio (no el ejemplo del
+contrato): título, overview, arquitectura + diagrama Mermaid del loop de dos
+niveles, 3 componentes de infra, 6 decisiones de diseño, 5 limitaciones — todo
+bilingüe ES/EN. Las limitaciones dicen explícito que el piloto servido es la
+heurística de camino A (el RL no convergió), que el radio va desfasado por CPU,
+y la tasa de descarte del 3B. Cargado antes de
+`https://alexisalulema.com/demo-panel.js` en `index.html` (aditivo — si el widget
+no carga, el demo no se afecta).
+
+**Paso 7 — `docs/handoff.md`.** projectId `agentic-racing`, nombre ES/EN, repo,
+`ghcr.io/alulema/agentic-racing:latest` + 8080, `shareable: true` (stateless),
+**sin secretos**, recurso extra = sidecar Ollama en la misma imagen (loopback,
+`entrypoint.sh`). + env vars (`OLLAMA_NUM_THREAD` = vCPU−1, etc.), sizing objetivo
+4 vCPU/8 GiB (upgrade request pendiente de confirmar), y el ciclo de vida
+tolerado.
+
+**Estado de Fase 5:** los 7 puntos del plan hechos. Falta cerrar el PR #4
+(sacar de draft cuando CI pase con todo) y el merge lo hace el dueno.

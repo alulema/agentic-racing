@@ -442,25 +442,33 @@ de radio mostrando razonamiento coherente con lo que pasa en pista.
 
 ### Fase 5 — Empaquetado y control de carga
 
-- [ ] Optimización del build WebGL: code stripping, compresión Brotli, texture compression.
-      Vigila el tamaño: la infra jala la imagen fresca en cada provisión y el visitante
-      descarga el build completo. Ojo: el modelo `llama3.2:3b` horneado ya añade ~2 GB a
-      la imagen — el margen para el resto es más estrecho que antes.
-- [ ] Guardrails de carga (ver sección 7)
-- [ ] Reparto de vCPU entre el sidecar Ollama y el proxy dentro del pod (2 vCPU / 4 GiB),
-      y `keep_alive` del modelo ajustado a la duración de sesión
-- [ ] Endpoints `/api/health` y `/api/ping`
-- [ ] Indicador en la UI del estado del LLM: latencia p95, si está en "modo offline"
-      (cortacircuitos disparado), y nº de respuestas descartadas por validación
-- [ ] **Panel "Acerca de este demo"**: rellenar `window.DEMO_INFO` con contenido propio
-      (bilingüe ES/EN), incluyendo diagrama Mermaid de la arquitectura de dos niveles, los
-      componentes de infra, decisiones de diseño y limitaciones honestas. El contrato trae
-      el esquema y un ejemplo ilustrativo — **no lo copies, escribe el de este demo**.
-- [ ] **Hand-off manifest** para el mantenedor de la infra: `projectId` (`agentic-racing`),
-      nombre legible ES/EN, URL del repo público, imagen GHCR + puerto `8080`,
-      `shareable: true` (el servidor es stateless), **sin secretos** (el LLM es local),
-      y **recursos extra: sidecar Ollama en la misma imagen** con `llama3.2:3b`
-      horneado (levantado por el supervisor junto con uvicorn, escucha en `127.0.0.1:11434`).
+- [x] Optimización del build WebGL: Brotli (`webGLCompressionFormat`, servido con
+      `Content-Encoding: br` por el proxy) + `stripEngineCode` + quitado
+      `com.unity.visualscripting` del manifest (bloat de template, su runtime entra al
+      player). Player: **~17 MB** de descarga (`.data.br` 6 MB + `.wasm.br` 11 MB). Sin
+      texturas que comprimir (mesh procedural + colores unlit). El build de CI apunta a
+      `Race.unity`, no a la escena vacía de Fase 0. Devlog 2026-09-10.
+- [x] Guardrails de carga (§7) — las 6 capas en `server/guardrails.py` + `strategy.py`:
+      cortacircuitos p95/racha → "offline", rate-limit por IP (token bucket), `num_predict`
+      150, modelo caliente + prefijo estable, semáforo de concurrencia + cooldown por auto,
+      un solo turno sin reintento.
+- [x] Reparto de vCPU + `keep_alive` — `ENV` en el Dockerfile: `OLLAMA_NUM_THREAD=3`
+      (= vCPU pod − 1; objetivo 4 vCPU / 8 GiB, ver `docs/handoff.md`),
+      `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`, `OLLAMA_KEEP_ALIVE=24h` (>
+      vida máx del pod; string, no `-1` — Ollama da 400). Imagen multi-stage: ~8.3 → **~4.5 GB**
+      (dropeados los runtimes CUDA/ROCm/Vulkan, ~2 GB, inútiles en CPU-only).
+- [x] Endpoints `/api/health` y `/api/ping` — en `server/main.py`, verificados en el
+      smoke test de la imagen `fase5`.
+- [x] Indicador en la UI del estado del LLM — chip `#llm-status` en `web/app.js`:
+      `online` / `offline · p95 X` / `down`, con `% rejected`. Poll de `/api/health` cada 5 s.
+- [x] **Panel "Acerca de este demo"** — `web/demo-info.js` (`window.DEMO_INFO`, bilingüe
+      ES/EN, diagrama Mermaid de la arquitectura de dos niveles, infra, decisiones,
+      limitaciones honestas — incluido que el piloto que se sirve es la heurística de camino
+      A, no RL). Cargado antes de `demo-panel.js` en `web/index.html`.
+- [x] **Hand-off manifest** — `docs/handoff.md`: `projectId agentic-racing`, nombre ES/EN,
+      repo, `ghcr.io/alulema/agentic-racing:latest` + 8080, `shareable: true`, sin secretos,
+      recurso extra = sidecar Ollama horneado en la misma imagen (loopback, levantado por
+      `entrypoint.sh`). + env vars y ciclo de vida tolerado.
 
 ### Fase 6 — Diferenciadores (lo que separa esto de un demo genérico de RL)
 
