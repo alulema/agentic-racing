@@ -2468,3 +2468,31 @@ se auto-borra (es el registro de lo que decidio el estratega, §6.1/§6.2), pero
 Typecheck Roslyn Unity 6000.3.22f1: 0 errores. `node --check` en overlay/app/mock.
 El C# necesita rebuild del player (Windows); overlay/css/html se sirven de `/web`
 (`git pull` + refrescar).
+
+### Fase 4: cache del navegador + pulido de overlay (2026-09-09)
+
+**Causa raiz de "no veo mis cambios de overlay":** el navegador servia un
+`overlay.js` / `style.css` viejos cacheados (anteriores a todo el trabajo de
+swatches/timestamps/banner). Verificado con Chrome automatizado: `transferSize=0`
+(cache), `encodedBodySize` del tamano antiguo. Arreglos:
+- `server/main.py`: `Cache-Control: no-cache` para `.html`/`.js`/`.css` (revalida
+  siempre; los `.br` grandes siguen cacheando).
+- `web/index.html` + `app.js`: `?v=6` en el `<script>` y en los `import` de
+  `overlay.js`/`mock.js`/`style.css`. Salta la copia vieja una vez; el header
+  mantiene fresco de aqui en mas (no hace falta volver a subir el numero).
+Confirmado en navegador tras el bust: timestamps en TODAS las lineas (LLM y
+fallback), cabecera `ultima senal: Xs`, swatch + nombre coloreado en clasificacion
+y radio, `.hud-card` a 0.78 / `.radio-msg` a 0.82 de opacidad, `#race-over`
+`display:none` -> `flex` con `.show`.
+
+**Pulido de overlay (servido de `/web`):**
+- Nombres en la clasificacion con el color del auto (`var(--car)`); "me" pasa a
+  fondo tenue en vez de recolorear.
+- Paneles -10% opacos.
+- `humanize()`: el estratega cita rivales por id de protocolo (`car_02`); el
+  overlay lo cambia a nombre de piloto (`P2-LateBrake`) en `target_rival` y en el
+  texto libre del radio, usando `carNames` de `race:start`.
+
+**Paleta (C#, `RaceDirector.Palette`, necesita rebuild del player):**
+`#86efac` (P6, segundo verde que se confundia con el mint de P1) -> `#fb923c`
+(naranja). Sincroniza cuerpo del auto + swatch + nombre + linea de radio.
