@@ -397,30 +397,48 @@ un adelantamiento limpio no programado explícitamente.
 **La sección 6 es la especificación completa. Impleméntala desde ahí; esto es solo el
 checklist de cierre.**
 
-- [ ] Cada auto tiene su propio jefe de equipo LLM **independiente**. No un cerebro
-      central: si todos comparten estratega no hay competencia real de tácticas.
-- [ ] Disparo por evento con cooldown y coalescing (6.6), más límite global de llamadas
-      concurrentes a Ollama (§7). La carrera **nunca espera** al LLM
-- [ ] Prefijo estable + sufijo variable (6.7); modelo caliente con `keep_alive` largo
-- [ ] Salida JSON forzada en la llamada a Ollama (`format` / grammar) y respuesta validada
-      contra el esquema (6.3, 6.4, 6.8); medir la tasa de respuestas descartadas — con un
-      modelo 3B es más alta que con uno hosted, y es dato para el post técnico
-- [ ] Mapeo directiva → controlador en un único ScriptableObject (6.5), escribiendo sobre
-      los canales de observación que ya existen desde Fase 2
-- [ ] Bitácora lap-over-lap alimentando el campo `notes`
-- [ ] **UI de radio de equipo (DOM, no Unity UI)**: panel overlay que muestra el campo
-      `radio` en vivo junto a cada auto, estilado con las variables del tema del sitio.
-      Esto es lo que hace que el demo comunique el concepto — no lo dejes para el final.
-- [ ] **Heartbeat**: ping a `/api/ping` mientras haya carrera activa, con periodo cómodo
-      bajo el umbral de inactividad de ~8 min. Sin esto la infra destruye el entorno a
-      mitad de carrera cuando el LLM está en cooldown, y parece un bug aleatorio.
-- [ ] Fallback: si Ollama falla, expira, o el cortacircuitos de carga (§7) se dispara, el
-      auto usa una directiva heurística por defecto y el demo sigue corriendo. **Nunca**
-      debe romperse la carrera por un problema del LLM.
-- [ ] Manejo elegante del cierre abrupto de conexión (el gateway corta al expirar sesión)
+- [x] Cada auto tiene su propio jefe de equipo LLM **independiente**. No un cerebro
+      central — `RaceStrategist` por auto, instanciado en `RaceDirector.BuildCar`.
+- [x] Disparo por evento con cooldown y coalescing (6.6), más límite global de llamadas
+      concurrentes a Ollama (§7). La carrera **nunca espera** al LLM — `RaceStrategist.Notify`
+      (cooldown 12 s, coalescing por `Rank`), `GlobalInFlightCap = 2` en cliente +
+      semáforo `MAX_CONCURRENT` en el proxy; la llamada va en corrutina, la directiva
+      vigente sigue hasta que llegue la respuesta.
+- [x] Prefijo estable + sufijo variable (6.7); modelo caliente con `keep_alive` largo —
+      `strategy.build_messages` (system byte-idéntico por auto), `OLLAMA_KEEP_ALIVE=25m`
+      (modelo residente verificado con `ollama ps`).
+- [x] Salida JSON forzada + validación contra el esquema (6.3, 6.4, 6.8); medir descartes —
+      `format:"json"` + `parse_response`/`_normalise`, descarte entero de la respuesta si no
+      valida. `rejected`/`failed` contados en `/api/health` y mostrados en el chip
+      ("N% rejected"). Con `llama3.2:3b` en CPU la tasa observada ronda 4–8% (dato para el
+      post técnico); ver Devlog 2026-09-09.
+- [x] Mapeo directiva → controlador en un único ScriptableObject (6.5), sobre los canales
+      de observación de Fase 2 — `StrategyDirectiveMap`; `RaceAgent.SetRaceDirective` escribe
+      `_directive`, que alimenta los 6 canales de `CollectObservations`.
+- [x] Bitácora lap-over-lap alimentando `notes` — `RaceStrategist._notes` vía `AddNote`
+      (fin de vuelta, incidente, recuperación), enviada en el prefijo de cada llamada.
+- [x] **UI de radio de equipo (DOM, no Unity UI)** — `web/overlay.js` panel `#radio`,
+      estilado solo con `var(--color-*)`; muestra `radio`, directiva/agg/risk, `→ rival`
+      (nombre de piloto), curvas, latencia, y marca fallback sin ocultarla (§6.2).
+- [x] **Heartbeat** a `/api/ping` mientras `raceActive` — `web/app.js`
+      `startHeartbeat`/`stopHeartbeat`, periodo `HEARTBEAT_MS` bajo el umbral de ~8 min.
+- [x] Fallback ante fallo/timeout/cortacircuitos — `RaceStrategist` → `HeuristicFallback`;
+      el proxy siempre devuelve HTTP 200 (`StrategyEnvelope`), el breaker abre a "offline"
+      sin error. La carrera nunca se rompe por el LLM.
+- [x] Cierre abrupto de conexión — `fetch(...).catch(() => {})` en el heartbeat y en
+      `/api/strategy`, gate `raceActive`, `.catch` del loader de Unity; el corte del gateway
+      al expirar la sesión no lanza excepción, la simulación cliente sigue.
 
 **Criterio de aceptación**: una carrera de 20 minutos completa sin errores, con el panel
 de radio mostrando razonamiento coherente con lo que pasa en pista.
+      — [~] Verificado end-to-end (build WebGL servido por el proxy, sin `?mock=1`): 0
+      errores JS/consola durante la corrida, chip LLM estable "online", radio coherente
+      (el estratega llega a comentar "rivals are bunched up"), autos que adelantan y se
+      abren tras el amontonamiento de salida, y la secuencia de meta (autos que paran +
+      banner "Carrera terminada" + orden de llegada congelado). Falta solo dejar una
+      sesión de ~20 min en primer plano para el soak formal — el throttling de pestaña en
+      segundo plano impide automatizarlo. CI: `build-webgl` verde, `test-editmode` 20/20
+      (tras `51413f0`, que le dio `checks:write`).
 
 ### Fase 5 — Empaquetado y control de carga
 

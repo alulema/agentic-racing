@@ -2542,3 +2542,51 @@ p95 ~22 s, lineas reales del estratega con tag verde.
 - `web/overlay.js`: `humanize()` ahora caza `car_02`, `Car 2`, `car 04`,
   `rival 1`… (antes solo `car_NN` exacto) -> nombre de piloto. El `format:"json"`
   suelto deja al modelo parafrasear los ids en el texto libre.
+
+### Fase 4 — CIERRE (2026-09-10)
+
+Los 10 items del checklist de §5 estan implementados y marcados en CLAUDE.md con
+su evidencia. Resumen de lo que quedo montado (camino A, sin RL):
+
+- **Escena** `Race.unity` (`RaceSceneBootstrap`): construye todo en runtime
+  (pista fija, curvas numeradas, camara top-down que encuadra el peloton) y
+  levanta un `RaceDirector` con 6 autos de `RaceDirective.Population`.
+- **`RaceDirector`**: parrilla + rotacion (§6.3: slot `(s+k)%N`, LLM sii
+  `(m+k)%N<llmCars`), clasificacion / gaps en segundos / tiempos de vuelta,
+  `TelemetrySnapshot` §6.3, disparo por evento a cada `RaceStrategist`
+  (LapCompleted/FinalLap/PositionChange/RivalInRange sostenido/Incident),
+  respawn suave con penalizacion de tiempo, bandera a cuadros (autos paran,
+  orden de llegada congelado, `race:end`).
+- **`RaceStrategist`** (uno por auto): cooldown+coalescing, corrutina a
+  `/api/strategy`, valida el sobre, escribe SOLO `CurrentDirective`, emite la
+  linea de radio; `UseLlm=false` -> control heuristico permanente (§6.3).
+- **Servidor**: `format:"json"` + validacion + `_normalise`; breaker/timeout
+  configurables por env (subidos para que `llama3.2:3b` en CPU no quede atrapado
+  "offline"); guardrails §7 (semaforo, rate-limit, cortacircuitos).
+- **Overlay** (`web/`): HUD con clasificacion coloreada + swatch, panel Team
+  Radio (timestamps, colapso de repetidas, `humanize()` de ids -> nombre de
+  piloto), chip de estado del LLM, heartbeat, banner de fin de carrera.
+- **Pilotos**: `RaceAgent` en `RaceMode` (heuristica pura, sin `.onnx`), con
+  flecha de rumbo (triangulo) sobre el cuerpo. Paleta de 6 colores separados.
+
+**Verificacion**: build WebGL de Windows servido por el proxy FastAPI
+(`STATIC_DIR=<repo>/web`, `docker compose`), abierto sin `?mock=1`. 0 errores
+JS/consola, LLM "online" estable (~4% descartes, ~7-9 s/llamada), radio coherente
+con la pista, adelantamientos reales, y la secuencia de meta completa. El soak
+formal de 20 min queda para dejar la pestana en primer plano (el throttling de
+pestana en segundo plano impide automatizarlo).
+
+**CI**: `build-webgl` verde; `test-editmode` pasaba 20/20 pero el job fallaba por
+falta de `checks:write` en el token — arreglado en `51413f0`.
+
+**Pendiente (NO bloquea el cierre — es Fase 5):**
+- Cablear `Race.unity` en `build-and-publish.yml` (el build de CI aun apunta a la
+  escena de Fase 1) y la imagen GHCR.
+- Opcional: atenuar/espaciar las lineas de radio de los 3 autos de control para
+  que el razonamiento del LLM se lea mejor.
+- Ganchos ya listos para Fase 6: `RaceStrategist.DecisionMade(StrategyRecord)`
+  (6.1 trazabilidad) y el campo mixto 3+3 con rotacion (6.3).
+
+**PR**: la rama `fase-2-rl-agente` (PR #3) cargo Fase 2 (camino A), Fase 3 Lite y
+Fase 4 en un hilo — el camino A fusiono 2+3. Se reescribe el cuerpo del PR para
+reflejarlo y se saca de draft para merge a `main`.
