@@ -2663,3 +2663,29 @@ el modelo horneado, `/api/strategy` devuelve directiva valida (~21 s en frio, ~7
 caliente, 0 rejected/failed). ENVs de tuning aplicados (`ollama serve` reporta
 `OLLAMA_MAX_LOADED_MODELS:1`, `OLLAMA_NUM_PARALLEL:1`). Bug atrapado en el smoke
 test: `keep_alive` no puede ser el string `"-1"` (Ollama 400) -> `24h`.
+
+### Pasos 5-7: guardrails verificados, panel "Acerca de", hand-off (2026-09-10)
+
+**Paso 5 (verificar, ya de Fase 4).** Las 6 capas de §7 confirmadas en
+`server/guardrails.py`/`strategy.py`; `/api/health` + `/api/ping` + el chip
+`#llm-status` (online/offline·p95/down + % rejected) verificados en el smoke test
+de la imagen. Marcados en el checklist §5.
+
+**Paso 6 — `web/demo-info.js`.** `window.DEMO_INFO` propio (no el ejemplo del
+contrato): título, overview, arquitectura + diagrama Mermaid del loop de dos
+niveles, 3 componentes de infra, 6 decisiones de diseño, 5 limitaciones — todo
+bilingüe ES/EN. Las limitaciones dicen explícito que el piloto servido es la
+heurística de camino A (el RL no convergió), que el radio va desfasado por CPU,
+y la tasa de descarte del 3B. Cargado antes de
+`https://alexisalulema.com/demo-panel.js` en `index.html` (aditivo — si el widget
+no carga, el demo no se afecta).
+
+**Paso 7 — `docs/handoff.md`.** projectId `agentic-racing`, nombre ES/EN, repo,
+`ghcr.io/alulema/agentic-racing:latest` + 8080, `shareable: true` (stateless),
+**sin secretos**, recurso extra = sidecar Ollama en la misma imagen (loopback,
+`entrypoint.sh`). + env vars (`OLLAMA_NUM_THREAD` = vCPU−1, etc.), sizing objetivo
+4 vCPU/8 GiB (upgrade request pendiente de confirmar), y el ciclo de vida
+tolerado.
+
+**Estado de Fase 5:** los 7 puntos del plan hechos. Falta cerrar el PR #4
+(sacar de draft cuando CI pase con todo) y el merge lo hace el dueno.
