@@ -10,9 +10,17 @@ on:
 env:
   IMAGE: ghcr.io/alulema/agentic-racing
 
+# Least privilege by default; jobs opt into more.
+permissions:
+  contents: read
+
 jobs:
   test-editmode:
     runs-on: ubuntu-latest
+    # game-ci/unity-test-runner publishes the NUnit results as a Check Run.
+    permissions:
+      contents: read
+      checks: write
     steps:
       - uses: actions/checkout@v4
         with:
