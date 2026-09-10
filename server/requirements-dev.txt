@@ -1,0 +1,6 @@
+# Test-only deps. Runtime deps are in requirements.txt (that's what the image
+# installs). Run the proxy tests without a model:
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   pytest server/tests -q
+-r requirements.txt
+pytest==8.3.4

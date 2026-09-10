@@ -122,11 +122,14 @@ calcular gradientes. Si en algún momento consideras cambiar a observaciones vis
 (cámaras), ese cálculo cambia — pero ese cambio no está en el plan.
 
 Setup:
-- VM Azure **spot**, compute-optimized, ~16 vCPU. Spot da 60–90% de descuento y el
-  entrenamiento tolera desalojos si haces checkpoint frecuente y usas `--resume`.
-- **No corras el Editor en la VM.** Construye un player headless de Linux de la escena de
-  entrenamiento, súbelo, y corre `mlagents-learn --env=<build>`. Ese binario no requiere
-  licencia Unity.
+- VM Azure **spot**, compute-optimized, ~16 vCPU — o la NUC del dueño del proyecto si
+  alcanza para la corrida (decisión revisada 2026-09-04, ver §9 y `docs/Devlog.md`: el
+  player de entrenamiento es **Windows/Mono**, no Linux/IL2CPP, así que si se usa VM cloud
+  debe ser Windows). Spot da 60–90% de descuento y el entrenamiento tolera desalojos si
+  haces checkpoint frecuente y usas `--resume`.
+- **No corras el Editor en la VM.** Construye un player headless de Windows (§9) de la
+  escena de entrenamiento, súbelo (o entrena localmente si ya estás en esa máquina), y
+  corre `mlagents-learn --env=<build>`. Ese binario no requiere licencia Unity.
 - Muchas arenas en paralelo (`--num-envs`), ajustado al número de núcleos.
 - **Desasigna la VM cuando no entrenes.** Detenida-desasignada no cobra cómputo.
 - Presupuesto estimado del proyecto completo: **~$15–40 en spot** (~80–150 horas de VM,
@@ -394,30 +397,48 @@ un adelantamiento limpio no programado explícitamente.
 **La sección 6 es la especificación completa. Impleméntala desde ahí; esto es solo el
 checklist de cierre.**
 
-- [ ] Cada auto tiene su propio jefe de equipo LLM **independiente**. No un cerebro
-      central: si todos comparten estratega no hay competencia real de tácticas.
-- [ ] Disparo por evento con cooldown y coalescing (6.6), más límite global de llamadas
-      concurrentes a Ollama (§7). La carrera **nunca espera** al LLM
-- [ ] Prefijo estable + sufijo variable (6.7); modelo caliente con `keep_alive` largo
-- [ ] Salida JSON forzada en la llamada a Ollama (`format` / grammar) y respuesta validada
-      contra el esquema (6.3, 6.4, 6.8); medir la tasa de respuestas descartadas — con un
-      modelo 3B es más alta que con uno hosted, y es dato para el post técnico
-- [ ] Mapeo directiva → controlador en un único ScriptableObject (6.5), escribiendo sobre
-      los canales de observación que ya existen desde Fase 2
-- [ ] Bitácora lap-over-lap alimentando el campo `notes`
-- [ ] **UI de radio de equipo (DOM, no Unity UI)**: panel overlay que muestra el campo
-      `radio` en vivo junto a cada auto, estilado con las variables del tema del sitio.
-      Esto es lo que hace que el demo comunique el concepto — no lo dejes para el final.
-- [ ] **Heartbeat**: ping a `/api/ping` mientras haya carrera activa, con periodo cómodo
-      bajo el umbral de inactividad de ~8 min. Sin esto la infra destruye el entorno a
-      mitad de carrera cuando el LLM está en cooldown, y parece un bug aleatorio.
-- [ ] Fallback: si Ollama falla, expira, o el cortacircuitos de carga (§7) se dispara, el
-      auto usa una directiva heurística por defecto y el demo sigue corriendo. **Nunca**
-      debe romperse la carrera por un problema del LLM.
-- [ ] Manejo elegante del cierre abrupto de conexión (el gateway corta al expirar sesión)
+- [x] Cada auto tiene su propio jefe de equipo LLM **independiente**. No un cerebro
+      central — `RaceStrategist` por auto, instanciado en `RaceDirector.BuildCar`.
+- [x] Disparo por evento con cooldown y coalescing (6.6), más límite global de llamadas
+      concurrentes a Ollama (§7). La carrera **nunca espera** al LLM — `RaceStrategist.Notify`
+      (cooldown 12 s, coalescing por `Rank`), `GlobalInFlightCap = 2` en cliente +
+      semáforo `MAX_CONCURRENT` en el proxy; la llamada va en corrutina, la directiva
+      vigente sigue hasta que llegue la respuesta.
+- [x] Prefijo estable + sufijo variable (6.7); modelo caliente con `keep_alive` largo —
+      `strategy.build_messages` (system byte-idéntico por auto), `OLLAMA_KEEP_ALIVE=25m`
+      (modelo residente verificado con `ollama ps`).
+- [x] Salida JSON forzada + validación contra el esquema (6.3, 6.4, 6.8); medir descartes —
+      `format:"json"` + `parse_response`/`_normalise`, descarte entero de la respuesta si no
+      valida. `rejected`/`failed` contados en `/api/health` y mostrados en el chip
+      ("N% rejected"). Con `llama3.2:3b` en CPU la tasa observada ronda 4–8% (dato para el
+      post técnico); ver Devlog 2026-09-09.
+- [x] Mapeo directiva → controlador en un único ScriptableObject (6.5), sobre los canales
+      de observación de Fase 2 — `StrategyDirectiveMap`; `RaceAgent.SetRaceDirective` escribe
+      `_directive`, que alimenta los 6 canales de `CollectObservations`.
+- [x] Bitácora lap-over-lap alimentando `notes` — `RaceStrategist._notes` vía `AddNote`
+      (fin de vuelta, incidente, recuperación), enviada en el prefijo de cada llamada.
+- [x] **UI de radio de equipo (DOM, no Unity UI)** — `web/overlay.js` panel `#radio`,
+      estilado solo con `var(--color-*)`; muestra `radio`, directiva/agg/risk, `→ rival`
+      (nombre de piloto), curvas, latencia, y marca fallback sin ocultarla (§6.2).
+- [x] **Heartbeat** a `/api/ping` mientras `raceActive` — `web/app.js`
+      `startHeartbeat`/`stopHeartbeat`, periodo `HEARTBEAT_MS` bajo el umbral de ~8 min.
+- [x] Fallback ante fallo/timeout/cortacircuitos — `RaceStrategist` → `HeuristicFallback`;
+      el proxy siempre devuelve HTTP 200 (`StrategyEnvelope`), el breaker abre a "offline"
+      sin error. La carrera nunca se rompe por el LLM.
+- [x] Cierre abrupto de conexión — `fetch(...).catch(() => {})` en el heartbeat y en
+      `/api/strategy`, gate `raceActive`, `.catch` del loader de Unity; el corte del gateway
+      al expirar la sesión no lanza excepción, la simulación cliente sigue.
 
 **Criterio de aceptación**: una carrera de 20 minutos completa sin errores, con el panel
 de radio mostrando razonamiento coherente con lo que pasa en pista.
+      — [~] Verificado end-to-end (build WebGL servido por el proxy, sin `?mock=1`): 0
+      errores JS/consola durante la corrida, chip LLM estable "online", radio coherente
+      (el estratega llega a comentar "rivals are bunched up"), autos que adelantan y se
+      abren tras el amontonamiento de salida, y la secuencia de meta (autos que paran +
+      banner "Carrera terminada" + orden de llegada congelado). Falta solo dejar una
+      sesión de ~20 min en primer plano para el soak formal — el throttling de pestaña en
+      segundo plano impide automatizarlo. CI: `build-webgl` verde, `test-editmode` 20/20
+      (tras `51413f0`, que le dio `checks:write`).
 
 ### Fase 5 — Empaquetado y control de carga
 
@@ -774,8 +795,23 @@ exactamente con la imagen de GameCI en CI.
   GameCI en CI debe coincidir exactamente con este string. Se eligió LTS sobre 6.5 porque
   ML-Agents es la dependencia más frágil del stack y es la que más probablemente fue
   validada contra LTS; además 6.3 LTS tiene soporte hasta diciembre de 2027.
-- Módulos del editor requeridos: **Web Build Support** (target del demo) y **Linux Build
-  Support (IL2CPP)** (player headless de entrenamiento). Ningún otro.
+- Módulos del editor requeridos: **Web Build Support** (target del demo) y **Windows Build
+  Support (Mono)** (player headless de entrenamiento). Ningún otro.
+
+  > ⚠️ **Por qué Windows/Mono y no Linux/IL2CPP para el player de entrenamiento** (decisión
+  > revisada 2026-09-04, ver `docs/Devlog.md`): la intención original era un player Linux
+  > para la VM de entrenamiento (§2.3), con IL2CPP porque Unity 6 **eliminó** el scripting
+  > backend Mono para el target Linux Standalone — hoy Linux solo ofrece IL2CPP. El problema:
+  > el comunicador gRPC que trae empaquetado ML-Agents (`Grpc.Core`, la librería vieja del
+  > proyecto grpc/grpc) no funciona bajo IL2CPP — su callback de redirección de logs nativos
+  > no está marcado `[MonoPInvokeCallback]`, así que el AOT de IL2CPP no puede generar el
+  > trampolín y truena con `System.NotSupportedException` al arrancar, antes de completar el
+  > handshake con `mlagents-learn`. Mono sí lo resuelve vía JIT. Windows Standalone sí sigue
+  > ofreciendo Mono (`windows-mono` en la CLI de Unity Hub), así que el player de
+  > entrenamiento se construye para Windows en su lugar — se corre en la partición Windows de
+  > la NUC del dueño del proyecto, o en una VM Windows si hace falta más cómputo. El WebGL del
+  > demo no se toca: sigue en IL2CPP (WebGL lo exige de todas formas) y no usa este
+  > comunicador.
 - `com.unity.ml-agents`: release 4.x
 - `com.unity.ai.inference`: la versión que ML-Agents 4.x requiera — verifica que no haya
   conflicto antes de fijarla
@@ -854,6 +890,13 @@ exactamente con la imagen de GameCI en CI.
 
 ## 12. Cómo trabajar conmigo
 
+- **Al retomar una sesión** (nueva ventana, nueva máquina — incluida la partición Windows de
+  la NUC, que es un directorio de proyecto distinto para Claude Code y no comparte memoria
+  con la sesión Linux): lee **las últimas entradas de `docs/Devlog.md`** antes de hacer nada.
+  Ahí queda el punto exacto donde se cerró la sesión anterior, qué se probó, qué falló, y qué
+  sigue. No asumas que el código o los scripts hacen lo que su nombre sugiere sin verificar
+  contra el Devlog — varias decisiones de este documento (§2.3, §9) se revisaron a mitad de
+  proyecto y el Devlog es la fuente de verdad de *por qué*.
 - Antes de cada fase, propón un plan corto y espera confirmación.
 - Un PR por fase. No mezcles fases.
 - Si el build de CI falla, lee el log y corrige — no pidas ayuda hasta haberlo intentado.

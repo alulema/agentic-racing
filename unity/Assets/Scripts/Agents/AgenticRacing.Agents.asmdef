@@ -1,0 +1,21 @@
+{
+    "name": "AgenticRacing.Agents",
+    "rootNamespace": "AgenticRacing.Agents",
+    "references": [
+        "AgenticRacing.Track",
+        "AgenticRacing.Vehicle",
+        "AgenticRacing.Strategy",
+        "AgenticRacing.Interop",
+        "Unity.ML-Agents",
+        "Unity.InferenceEngine"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

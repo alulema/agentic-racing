@@ -1,40 +1,46 @@
-"""FastAPI server: serves the Unity WebGL build as static files, and proxies
-`/api/strategy` to the local Ollama sidecar (CLAUDE.md section 2.5).
+"""FastAPI server for the agentic-racing demo.
 
-Unity WebGL builds pre-compress their heavy assets (.framework.js, .wasm, .data)
-into .br (Brotli) or .gz (gzip) files and reference those exact filenames from
-index.html. A generic static file server has no idea these are compressed —
-it serves the raw compressed bytes without a `Content-Encoding` header, so the
-browser doesn't decompress them and Unity fails to parse the file. This module
-exists specifically to set those headers correctly. See CLAUDE.md section 11
-("Headers de Unity WebGL") for the failure this avoids.
+Two jobs:
+
+1. Serve the Unity WebGL build as static files with the right headers for the
+   pre-compressed ``.br`` / ``.gz`` assets Unity emits (a generic static server
+   gets ``Content-Encoding`` wrong and the browser fails to parse them — see
+   CLAUDE.md §11).
+2. Proxy ``POST /api/strategy`` to the local Ollama sidecar: build the prompt
+   (stable prefix + variable telemetry, §6.7), force JSON-schema output, one
+   inference turn, validate the reply (§6.8), and return a directive — behind
+   the load guardrails of §7 (global concurrency gate, circuit breaker to an
+   "offline" fallback, per-IP rate limit). Plus ``/api/health`` and
+   ``/api/ping`` (the client heartbeat that keeps the ephemeral pod alive,
+   §2.2).
+
+The server is stateless (§2.2): no race history, no per-car session. The client
+sends the stable ``context`` on every call so Ollama can still reuse the KV
+prefix.
 """
 
-import json
+from __future__ import annotations
+
 import mimetypes
 import os
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, ValidationError
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import ValidationError
 
-# Root directory of static assets to serve (the Unity WebGL build output).
-# Overridable via env var so we can point at a throwaway test build today
-# and at the real build's copied-in location once Docker exists.
+from guardrails import GuardrailState
+from schemas import LlmStatus, StrategyEnvelope, StrategyRequest, StrategyResponse
+from strategy import OllamaError, build_messages, call_ollama, clamp_radio, parse_response
+
+# --- static serving (unchanged from Fase 0) --------------------------------
+
 STATIC_DIR = Path(os.environ.get("STATIC_DIR", "../web")).resolve()
 
-# Content-Encoding implied by these suffixes, and how to recover the real
-# content type: strip the suffix and guess from what's left.
-ENCODING_BY_SUFFIX = {
-    ".br": "br",
-    ".gz": "gzip",
-}
-
-# mimetypes doesn't reliably know about these on every platform/Python
-# version, so pin the ones Unity WebGL builds actually produce.
+ENCODING_BY_SUFFIX = {".br": "br", ".gz": "gzip"}
 EXTRA_CONTENT_TYPES = {
     ".wasm": "application/wasm",
     ".js": "application/javascript",
@@ -42,75 +48,163 @@ EXTRA_CONTENT_TYPES = {
     ".symbols.json": "application/octet-stream",
 }
 
-app = FastAPI()
+# --- strategist config ----------------------------------------------------
 
-# CLAUDE.md sección 2.5: el estratega corre en un modelo local servido por un
-# sidecar Ollama. Sin API externa, sin secretos. OLLAMA_URL es overridable para
-# apuntar a un Ollama del host durante el desarrollo; en la imagen el sidecar
-# escucha en 127.0.0.1:11434.
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
-
-# Tope duro de tokens de salida (CLAUDE.md sección 7, punto 3): acota latencia.
-STRATEGY_NUM_PREDICT = 150
-# Timeout corto (CLAUDE.md sección 6.8): vencido, en Fase 4 sigue la directiva
-# vigente. En Fase 0 devolvemos 503 para que el smoke test lo note.
-STRATEGY_TIMEOUT_S = 30.0
-
-
-class StrategySmokeTestResponse(BaseModel):
-    """Placeholder de Fase 0: solo valida que el proxy funciona end-to-end
-    (sidecar Ollama alcanzable, respuesta JSON parseada contra un esquema). El
-    payload/esquema real de telemetría es Fase 4 — ver CLAUDE.md sección
-    6.3/6.4."""
-
-    directive: Literal["attack", "defend", "conserve", "push"]
-    radio: str
+# Keep the model resident for the whole session so no call pays a reload and
+# the KV-cache of each car's prefix survives between events (§6.7, §7.4).
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "25m")
+# Timeout (§6.8): on expiry the client keeps its current directive. Sized for a
+# CPU-only 3B — a schema-free JSON generation still runs ~20-30 s on a small box.
+STRATEGY_TIMEOUT_S = float(os.environ.get("STRATEGY_TIMEOUT_S", "45"))
+# §7.5: at most this many calls reach Ollama at once (1-2 on a CPU-only pod).
+MAX_CONCURRENT = int(os.environ.get("STRATEGY_MAX_CONCURRENT", "1"))
+# Circuit breaker (§7.1). The p95 threshold has to sit above the model's real
+# latency on the target box, or a working-but-slow LLM is stuck "offline"; the
+# radio just lags the race by that much (§2.5 accepts this).
+BREAKER_P95_MS = int(os.environ.get("STRATEGY_BREAKER_P95_MS", "35000"))
+BREAKER_COOLDOWN_S = float(os.environ.get("STRATEGY_BREAKER_COOLDOWN_S", "60"))
 
 
-_SMOKE_TEST_PROMPT = (
-    "You are a race engineer radioing your driver over the team radio. "
-    "Car is P3, gap ahead 1.2s, gap behind 4.0s, lap 3 of 5. "
-    "Give a short radio call (max 15 words) and a directive."
-)
-
-
-@app.get("/api/strategy")
-def strategy_smoke_test() -> StrategySmokeTestResponse:
-    # Ollama structured output: pasar el JSON Schema como `format` fuerza al
-    # modelo a emitir exactamente esa forma (mejor adherencia a enums que
-    # format="json" a secas, que importa con un modelo 3B — CLAUDE.md §6.8).
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": [{"role": "user", "content": _SMOKE_TEST_PROMPT}],
-        "stream": False,
-        "format": StrategySmokeTestResponse.model_json_schema(),
-        "options": {"num_predict": STRATEGY_NUM_PREDICT, "temperature": 0.4},
-        "keep_alive": "30m",  # mantener el modelo caliente entre llamadas (§6.7)
-    }
-
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.http = httpx.AsyncClient()
+    app.state.guard = GuardrailState(
+        max_concurrent=MAX_CONCURRENT,
+        breaker_p95_ms=BREAKER_P95_MS,
+        breaker_cooldown_s=BREAKER_COOLDOWN_S,
+    )
+    app.state.ollama_probe = (0.0, False)  # (checked_at, reachable) — cached
     try:
-        resp = httpx.post(
-            f"{OLLAMA_URL}/api/chat", json=payload, timeout=STRATEGY_TIMEOUT_S
+        yield
+    finally:
+        await app.state.http.aclose()
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+# --- strategist endpoint ------------------------------------------------------
+
+
+def _envelope(
+    guard: GuardrailState,
+    *,
+    status: str,
+    strategy: StrategyResponse | None = None,
+    reason: str | None = None,
+    latency_ms: int = 0,
+) -> JSONResponse:
+    env = StrategyEnvelope(
+        status=status,  # type: ignore[arg-type]
+        strategy=strategy,
+        reason=reason,
+        latency_ms=latency_ms,
+        llm=LlmStatus(**guard.snapshot()),
+    )
+    return JSONResponse(env.model_dump())
+
+
+@app.post("/api/strategy")
+async def strategy(req: StrategyRequest, request: Request) -> JSONResponse:
+    guard: GuardrailState = request.app.state.guard
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not guard.allow_ip(client_ip):
+        return _envelope(guard, status="fallback", reason="rate_limited")
+
+    # Circuit breaker open: don't even touch Ollama (§7.1). Not an error.
+    if guard.offline:
+        return _envelope(guard, status="fallback", reason="offline")
+
+    slot = await guard.acquire_slot()
+    if slot is None:
+        return _envelope(guard, status="fallback", reason="busy")
+
+    known_ids = (
+        {req.context.car_id, req.telemetry.me.car_id}
+        | {r.car_id for r in req.telemetry.rivals}
+    )
+    messages = build_messages(req.context, req.telemetry)
+
+    async with slot:
+        guard.calls += 1
+        try:
+            content, latency_ms = await call_ollama(
+                request.app.state.http,
+                base_url=OLLAMA_URL,
+                model=OLLAMA_MODEL,
+                keep_alive=OLLAMA_KEEP_ALIVE,
+                messages=messages,
+                timeout_s=STRATEGY_TIMEOUT_S,
+            )
+        except OllamaError as exc:
+            guard.record_failure()
+            return _envelope(guard, status="fallback", reason=f"ollama_error: {exc}"[:200])
+
+        guard.record_success(latency_ms)
+
+        try:
+            parsed = parse_response(content, known_ids)
+        except (ValidationError, ValueError) as exc:
+            # Discard the whole reply, keep the current directive (§6.8).
+            guard.rejected += 1
+            return _envelope(
+                guard,
+                status="fallback",
+                reason="rejected",
+                latency_ms=int(latency_ms),
+            )
+
+        parsed.radio = clamp_radio(parsed.radio)
+        return _envelope(
+            guard, status="ok", strategy=parsed, latency_ms=int(latency_ms)
         )
-        resp.raise_for_status()
-    except httpx.HTTPError as exc:
-        # Sidecar caído / timeout: en Fase 4 esto dispara el fallback heurístico
-        # (CLAUDE.md §6.8). En Fase 0 lo reportamos.
-        raise HTTPException(
-            status_code=503, detail=f"ollama unreachable: {exc}"
-        ) from exc
 
-    content = resp.json().get("message", {}).get("content", "")
+
+# --- health / heartbeat ----------------------------------------------------
+
+
+async def _ollama_reachable(request: Request) -> bool:
+    """Cheap cached liveness probe of the sidecar (re-checked every ~5 s)."""
+
+    checked_at, ok = request.app.state.ollama_probe
+    now = time.monotonic()
+    if now - checked_at < 5.0:
+        return ok
     try:
-        return StrategySmokeTestResponse.model_validate_json(content)
-    except (ValidationError, json.JSONDecodeError) as exc:
-        # Respuesta que no valida contra el esquema: se descarta entera, no se
-        # parchea (CLAUDE.md §6.8). En Fase 0 es un fallo del smoke test.
-        raise HTTPException(
-            status_code=502,
-            detail=f"model output failed schema validation: {content[:200]}",
-        ) from exc
+        resp = await request.app.state.http.get(
+            f"{OLLAMA_URL}/api/version", timeout=2.0
+        )
+        ok = resp.status_code == 200
+    except httpx.HTTPError:
+        ok = False
+    request.app.state.ollama_probe = (now, ok)
+    return ok
+
+
+@app.get("/api/health")
+async def health(request: Request) -> JSONResponse:
+    guard: GuardrailState = request.app.state.guard
+    return JSONResponse(
+        {
+            "status": "ok",
+            "llm": guard.snapshot(),
+            "ollama_reachable": await _ollama_reachable(request),
+            "static_dir": str(STATIC_DIR),
+        }
+    )
+
+
+@app.get("/api/ping")
+async def ping() -> JSONResponse:
+    # The client hits this on a timer while a race is running so the ephemeral
+    # infra doesn't tear the pod down for inactivity (~8 min) mid-race (§2.2).
+    return JSONResponse({"ok": True, "ts": time.time()})
+
+
+# --- static files (must be registered last: it owns "/{path:path}") ---------
 
 
 def _resolve_content_type(inner_name: str) -> str:
@@ -121,15 +215,23 @@ def _resolve_content_type(inner_name: str) -> str:
     return guessed or "application/octet-stream"
 
 
+# The shell (index.html, app.js, overlay.js, style.css) is tiny and changes
+# often; the browser must not serve a stale ES module after a redeploy. The big
+# Unity Build/*.br assets are effectively immutable per build, so let them cache.
+_NO_CACHE_SUFFIXES = {".html", ".js", ".css"}
+
+
 def _serve(file_path: Path) -> FileResponse:
-    headers = {}
+    headers: dict[str, str] = {}
     content_type_source = file_path.name
 
     encoding = ENCODING_BY_SUFFIX.get(file_path.suffix)
     if encoding:
         headers["Content-Encoding"] = encoding
-        # e.g. "web-test.framework.js.br" -> "web-test.framework.js"
         content_type_source = file_path.name[: -len(file_path.suffix)]
+
+    if file_path.suffix in _NO_CACHE_SUFFIXES:
+        headers["Cache-Control"] = "no-cache"
 
     content_type = _resolve_content_type(content_type_source)
     return FileResponse(file_path, media_type=content_type, headers=headers)
@@ -137,15 +239,12 @@ def _serve(file_path: Path) -> FileResponse:
 
 @app.get("/{path:path}")
 def serve_static(path: str) -> FileResponse:
-    # Default to index.html for the root and any path with no filename.
     requested = path if path else "index.html"
-
     file_path = (STATIC_DIR / requested).resolve()
 
     # Guard against path traversal outside STATIC_DIR.
     if STATIC_DIR not in file_path.parents and file_path != STATIC_DIR:
         raise HTTPException(status_code=404)
-
     if not file_path.is_file():
         raise HTTPException(status_code=404)
 

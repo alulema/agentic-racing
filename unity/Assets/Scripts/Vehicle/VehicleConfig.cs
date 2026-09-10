@@ -38,12 +38,23 @@ namespace AgenticRacing.Vehicle
         public float TurnRateDegPerSec = 130f;
         [Tooltip("Fraction of TurnRate still available at MaxSpeed (0..1).")]
         public float HighSpeedTurnFactor = 0.35f;
-        [Tooltip("Below this speed (m/s) the car barely steers (prevents spinning in place).")]
-        public float SteerFadeInSpeed = 1.5f;
+        [Tooltip("Steering authority ramps in up to this speed (m/s). Kept low so a " +
+                 "car pinned against a wall can still turn its nose away and drive off " +
+                 "— at 1.5 it was completely helpless once stopped (Devlog 2026-09-07).")]
+        public float SteerFadeInSpeed = 0.4f;
+        [Tooltip("Minimum fraction of steering authority even below SteerFadeInSpeed.")]
+        [Range(0f, 1f)] public float MinSteerAuthority = 0.25f;
 
         [Header("Grip")]
-        [Tooltip("Lateral grip as an acceleration multiplier; higher = less sliding.")]
-        public float LateralGrip = 9f;
+        [Tooltip("Fraction of sideways velocity the tyres resolve per second " +
+                 "(scaled by dt). Higher = less drift.")]
+        public float LateralGrip = 7f;
+        [Tooltip("Of the sideways velocity the grip removes, this fraction is " +
+                 "redirected FORWARD (tyres turn the car's momentum, they don't " +
+                 "scrub the speed off). < 1 so there is always some scrub loss. " +
+                 "At 0 the model brakes the car on every steer and RL/heuristic " +
+                 "learn to never turn (Devlog 2026-09-07).")]
+        [Range(0f, 1f)] public float GripRedirect = 0.85f;
         [Tooltip("Extra downward force (N) to keep the car planted over crests.")]
         public float Downforce = 2000f;
 

@@ -21,6 +21,13 @@ namespace AgenticRacing.Vehicle
 
         private Rigidbody _rb;
 
+        /// <summary>
+        /// When true the keyboard drives the car. The RL agent (Fase 2) and the
+        /// strategist (Fase 4) turn this off and write <see cref="Throttle"/> /
+        /// <see cref="Brake"/> / <see cref="Steer"/> directly.
+        /// </summary>
+        public bool ReadKeyboard { get => readKeyboard; set => readKeyboard = value; }
+
         /// <summary>-1..1 forward request (keyboard or external controller).</summary>
         public float Throttle { get; set; }
         /// <summary>0..1 brake request.</summary>
@@ -39,16 +46,22 @@ namespace AgenticRacing.Vehicle
             _rb = GetComponent<Rigidbody>();
             if (config == null) config = VehicleConfig.CreateDefault();
 
-#if UNITY_WEBGL && !UNITY_EDITOR
-            // Route browser keyboard to the canvas even without an explicit click.
-            WebGLInput.captureAllKeyboardInput = true;
-#endif
+            // (Unity 6 removed the WebGLInput class that older builds used here to
+            // force browser keyboard capture onto the canvas. The Fase 4 race is
+            // autonomous — RL pilot + LLM strategist — so no keyboard capture is
+            // needed; manual-drive dev scenes get focus from a canvas click.)
 
             _rb.mass = config.Mass;
             _rb.linearDamping = config.LinearDrag;
             _rb.angularDamping = config.AngularDrag;
             _rb.interpolation = RigidbodyInterpolation.Interpolate;
-            _rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            // Discrete, NOT Continuous: ApplySteering yaws the body every frame
+            // with MoveRotation, and CCD's sweep over the rotating box collider
+            // generated phantom self-contacts that braked the car hard whenever it
+            // steered — the "car crawls / stops dead mid-track" bug that dogged
+            // race01-08 (Devlog 2026-09-08). The 1 m walls are thick enough that a
+            // 0.44 m/step car never tunnels, so CCD buys nothing here.
+            _rb.collisionDetectionMode = CollisionDetectionMode.Discrete;
             _rb.useGravity = false;
             // Fase 1 track is a flat ribbon at Y = 0 with no ground plane, so pin
             // the car to that plane (no falling through the mesh collider) and
@@ -129,9 +142,11 @@ namespace AgenticRacing.Vehicle
             if (Mathf.Abs(Steer) < 0.01f) return;
 
             float speed = Mathf.Abs(vFwd);
-            // No steering authority when nearly stopped; full at low speed;
-            // tapering to HighSpeedTurnFactor by MaxSpeed.
-            float speedT = Mathf.Clamp01(speed / config.SteerFadeInSpeed);
+            // Some authority even when stopped (MinSteerAuthority) so a pinned car
+            // can turn away from a wall; ramps to full by SteerFadeInSpeed; then
+            // tapers to HighSpeedTurnFactor by MaxSpeed.
+            float speedT = Mathf.Lerp(config.MinSteerAuthority, 1f,
+                                      Mathf.Clamp01(speed / Mathf.Max(0.01f, config.SteerFadeInSpeed)));
             float highT = Mathf.Clamp01(speed / config.MaxSpeed);
             float authority = speedT * Mathf.Lerp(1f, config.HighSpeedTurnFactor, highT);
 
@@ -145,11 +160,18 @@ namespace AgenticRacing.Vehicle
 
         private void ApplyLateralGrip(Vector3 fwd)
         {
+            Vector3 v = _rb.linearVelocity;
             Vector3 right = transform.right;
-            float vRight = Vector3.Dot(_rb.linearVelocity, right);
-            // Cancel most of the sideways velocity each step; what leaks through
-            // is the slide/drift.
-            _rb.AddForce(-right * (vRight * config.LateralGrip), ForceMode.Acceleration);
+            float vRight = Vector3.Dot(v, right);
+
+            // Tyres REDIRECT the car's momentum along its heading; they don't
+            // scrub the speed off. Remove a fraction of the sideways velocity and
+            // put GripRedirect of that magnitude back along +forward. Deleting it
+            // outright (the old model) meant every steer braked the car, so
+            // RL/heuristic learned to never turn (Devlog 2026-09-07).
+            float k = Mathf.Clamp01(config.LateralGrip * Time.fixedDeltaTime);
+            float dSide = -vRight * k;
+            _rb.linearVelocity = v + right * dSide + fwd * (Mathf.Abs(dSide) * config.GripRedirect);
         }
 
         /// <summary>Places the car at a pose and clears its motion (grid reset).</summary>

@@ -36,30 +36,48 @@ namespace AgenticRacing.Track
         public int SamplesPerSegment;   // spline density before arc-length resample
         public int MaxAttempts;         // deterministic seed re-derivations before giving up
 
+        // Fixed rounded-rectangle circuit (ignores the seed). Camino A: after
+        // race01-08 the RL pilot never learned to lap procedural tracks, so the
+        // demo uses one deterministic, gentle circuit with 4 numbered corners
+        // (Devlog 2026-09-08). The seed still selects a car-population member etc.
+        public bool FixedRoundedRect;
+        public float FixedHalfWidth;    // metres, half the long axis
+        public float FixedHalfHeight;   // metres, half the short axis
+        public float FixedCornerRadius; // metres, the 4 corner arcs
+
+        // Deliberately gentle circuits. The demo is about the pilot<->strategist
+        // agentic loop, not a racing sim (CLAUDE.md §12) — the track needs a
+        // handful of numbered corners the strategist can reason about, not
+        // hairpins. Tightened harmonics + a 30 m minimum corner radius keep every
+        // bend takeable at speed with margin (Devlog 2026-09-07).
         public static TrackParams Default => new TrackParams
         {
-            MinControlPoints = 16,
-            MaxControlPoints = 22,
+            MinControlPoints = 14,
+            MaxControlPoints = 18,
             BaseRadius = 300f,
-            MinHarmonics = 2,
-            MaxHarmonics = 3,
+            MinHarmonics = 1,
+            MaxHarmonics = 2,
             MinHarmonicFreq = 2,
-            MaxHarmonicFreq = 5,
-            HarmonicAmpMin = 0.12f,
-            HarmonicAmpMax = 0.30f,
-            RadialJitterMin = -0.05f,
-            RadialJitterMax = 0.05f,
-            RadiusClampMin = 0.45f,
-            RadiusClampMax = 1.75f,
-            AngularJitter = 0.35f,
+            MaxHarmonicFreq = 3,
+            HarmonicAmpMin = 0.08f,
+            HarmonicAmpMax = 0.16f,
+            RadialJitterMin = -0.035f,
+            RadialJitterMax = 0.035f,
+            RadiusClampMin = 0.6f,
+            RadiusClampMax = 1.5f,
+            AngularJitter = 0.2f,
             MinLength = 1500f,
             MaxLength = 2500f,
-            MinCornerRadius = 12f,
+            MinCornerRadius = 30f,
             CenterlineSpacing = 2f,
             CurvatureStencil = 6f,
             TrackWidth = 12f,
             SamplesPerSegment = 120,
-            MaxAttempts = 40,
+            MaxAttempts = 120,
+            FixedRoundedRect = true,
+            FixedHalfWidth = 350f,     // perimeter ~2 km: 2*(2*230) straights + 2*(2*80) + 4 quarter-arcs of r=120
+            FixedHalfHeight = 200f,
+            FixedCornerRadius = 120f,
         };
     }
 
@@ -194,22 +212,30 @@ namespace AgenticRacing.Track
                 phase[h] = (float)rng.NextDouble() * Mathf.PI * 2f;
             }
 
-            int controlCount = rng.Next(p.MinControlPoints, p.MaxControlPoints + 1);
-            var control = new List<Vector2>(controlCount);
-            float step = Mathf.PI * 2f / controlCount;
-            for (int i = 0; i < controlCount; i++)
+            List<Vector2> control;
+            if (p.FixedRoundedRect)
             {
-                // Angle stays monotonic: even slot + bounded jitter that cannot
-                // reach the next slot, so the loop never folds back on itself.
-                float angle = i * step + ((float)rng.NextDouble() - 0.5f) * step * p.AngularJitter;
+                control = RoundedRectControlPoints(p.FixedHalfWidth, p.FixedHalfHeight, p.FixedCornerRadius);
+            }
+            else
+            {
+                int controlCount = rng.Next(p.MinControlPoints, p.MaxControlPoints + 1);
+                control = new List<Vector2>(controlCount);
+                float step = Mathf.PI * 2f / controlCount;
+                for (int i = 0; i < controlCount; i++)
+                {
+                    // Angle stays monotonic: even slot + bounded jitter that cannot
+                    // reach the next slot, so the loop never folds back on itself.
+                    float angle = i * step + ((float)rng.NextDouble() - 0.5f) * step * p.AngularJitter;
 
-                float modulation = 0f;
-                for (int h = 0; h < harmonics; h++)
-                    modulation += amp[h] * Mathf.Sin(angle * freq[h] + phase[h]);
-                modulation += Mathf.Lerp(p.RadialJitterMin, p.RadialJitterMax, (float)rng.NextDouble());
+                    float modulation = 0f;
+                    for (int h = 0; h < harmonics; h++)
+                        modulation += amp[h] * Mathf.Sin(angle * freq[h] + phase[h]);
+                    modulation += Mathf.Lerp(p.RadialJitterMin, p.RadialJitterMax, (float)rng.NextDouble());
 
-                float radius = p.BaseRadius * Mathf.Clamp(1f + modulation, p.RadiusClampMin, p.RadiusClampMax);
-                control.Add(new Vector2(Mathf.Cos(angle) * radius, Mathf.Sin(angle) * radius));
+                    float radius = p.BaseRadius * Mathf.Clamp(1f + modulation, p.RadiusClampMin, p.RadiusClampMax);
+                    control.Add(new Vector2(Mathf.Cos(angle) * radius, Mathf.Sin(angle) * radius));
+                }
             }
 
             var fine = CatmullRomSpline.SampleClosed(control, p.SamplesPerSegment);
@@ -270,6 +296,49 @@ namespace AgenticRacing.Track
                 p.TrackWidth, startDir, corners, racingLine);
             reason = null;
             return true;
+        }
+
+        /// <summary>
+        /// Control-point loop for a rounded rectangle: two long straights, two
+        /// short straights, four quarter-circle corners of <paramref name="r"/>.
+        /// Points are dense along the arcs and sparse on the straights; the
+        /// Catmull-Rom pass + arc-length resample turn it into the centerline.
+        /// Traced counter-clockwise from the middle of the right straight.
+        /// </summary>
+        private static List<Vector2> RoundedRectControlPoints(float halfW, float halfH, float r)
+        {
+            r = Mathf.Min(r, Mathf.Min(halfW, halfH) - 1f);
+            float sx = halfW - r;   // straight half-length along X
+            float sy = halfH - r;   // straight half-length along Y
+            var pts = new List<Vector2>(64);
+
+            // Corner-arc centres, CCW order: right straight -> TR arc -> top -> TL
+            // arc -> left -> BL arc -> bottom -> BR arc.
+            Vector2[] centre = { new(sx, sy), new(-sx, sy), new(-sx, -sy), new(sx, -sy) };
+            float[] startDeg = { 0f, 90f, 180f, 270f };
+            Vector2[] straightEnd = { new(sx, halfH), new(-halfW, sy), new(-sx, -halfH), new(halfW, -sy) };
+
+            pts.Add(new Vector2(halfW, 0f)); // middle of the right straight = index 0
+            for (int q = 0; q < 4; q++)
+            {
+                // half a straight into this corner (skip for q==0, already added)
+                if (q > 0)
+                {
+                    Vector2 prevEnd = straightEnd[(q + 3) % 4];
+                    Vector2 arcStart = centre[q] + Rot(startDeg[q]) * r;
+                    pts.Add(Vector2.Lerp(prevEnd, arcStart, 0.5f));
+                }
+                for (int k = 0; k <= 8; k++)
+                    pts.Add(centre[q] + Rot(startDeg[q] + k * (90f / 8f)) * r);
+                pts.Add(Vector2.Lerp(straightEnd[q], q == 3 ? new Vector2(halfW, 0f) : centre[q + 1] + Rot(startDeg[q + 1]) * r, 0.5f));
+            }
+            return pts;
+        }
+
+        private static Vector2 Rot(float deg)
+        {
+            float a = deg * Mathf.Deg2Rad;
+            return new Vector2(Mathf.Cos(a), Mathf.Sin(a));
         }
 
         /// <summary>
