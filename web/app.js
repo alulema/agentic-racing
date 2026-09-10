@@ -11,8 +11,8 @@
  * whole DOM layer be checked in a plain browser with no build.
  */
 
-import { initOverlay } from "./overlay.js";
-import { startMock } from "./mock.js";
+import { initOverlay } from "./overlay.js?v=6";
+import { startMock } from "./mock.js?v=6";
 
 const overlay = initOverlay();
 const params = new URLSearchParams(location.search);
