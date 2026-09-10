@@ -120,6 +120,10 @@ jobs:
           src=unity-build-output/WebGL
           test -d "$src/Build" || { echo "::error::$src/Build missing — artifact layout changed"; ls -R "$src"; exit 1; }
           test -f "$src/Build/web-test.loader.js" || { echo "::error::web-test.* files missing — buildName changed?"; ls -R "$src/Build"; exit 1; }
+          # web/app.js loads .br — a compression regression (ProjectSettings
+          # webGLCompressionFormat != Brotli) must fail here, not silently ship
+          # an unloadable player.
+          test -f "$src/Build/web-test.wasm.br" || { echo "::error::web-test.wasm.br missing — WebGL build is not Brotli-compressed"; ls -la "$src/Build"; exit 1; }
           cp -r "$src/Build" web/Build
           cp -r "$src/TemplateData" web/TemplateData
           if [ -d "$src/StreamingAssets" ]; then
