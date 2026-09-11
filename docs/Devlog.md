@@ -2711,3 +2711,14 @@ Fix: quitar los comentarios. Reescrito via `SerializedObject` en el Editor y
 verificado: `count=9`, `[7] URP/Unlit` y `[8] URP/Lit` resuelven. (Los builds
 manuales de Windows via `Fase4RaceScene.BuildWebGL` no tenian el bug porque ese
 metodo hace su propio add/remove de shaders por-build.)
+
+Rama `fix-webgl-magenta`, PR #5. CI verde (run `34546237285`): `build-webgl`
+12m8s, `test-editmode` 20/20, `build-and-push-image` compila (PR → sin push).
+Re-verificado en local: bajado el artefacto `webgl-build` corregido, re-armada
+`agentic-racing:local` (COPY web/ nuevo), `docker run` + Chrome — **la pista ya
+renderiza en gris asfalto con la linea de trazada cyan, sin magenta**. Consola
+sin error de `Universal Render Pipeline/Unlit`/`Lit` (quedan solo 3 errores de
+shaders internos de URP — `Hidden/CoreSRP/CoreCopy`, `StencilDitherMaskSeed`,
+`HDRDebugView` — inocuos, no afectan el material de la pista ni los autos). Chip
+LLM "online", una linea real del estratega con tag `LLM` y latencia ~21 s,
+marcadores de curva `T1` visibles.
