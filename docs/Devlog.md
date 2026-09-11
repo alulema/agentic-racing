@@ -2689,3 +2689,25 @@ tolerado.
 
 **Estado de Fase 5:** los 7 puntos del plan hechos. Falta cerrar el PR #4
 (sacar de draft cuando CI pase con todo) y el merge lo hace el dueno.
+
+### Fix: pista magenta en el build de CI (2026-09-10)
+
+Al probar la imagen de produccion en local (`docker run` de `agentic-racing:local`
+armada desde `main` con el artefacto WebGL de CI) la **pista salio magenta**. El
+resto bien: panel "Acerca de" carga, timestamps, nombres coloreados, lineas
+reales del LLM.
+
+Causa: el commit `013223c` (Fase 5 paso 1) agrego a mano las entradas de
+`Universal Render Pipeline/Unlit` + `Lit` a `m_AlwaysIncludedShaders` de
+`GraphicsSettings.asset`, **pero puso 4 lineas de comentario `#` dentro de la
+secuencia YAML**. El parser YAML de Unity (subconjunto estricto) descarta esas
+entradas al cargar el asset — el probe en el Editor mostraba `count=7`, sin las 2
+URP. Sin always-included, el build generico de `game-ci/unity-builder` (sin
+`buildMethod`, que no corre el force-include de `Fase4RaceScene`) las stripea y
+`RaceSceneBootstrap.BuildSurface` / `RaceDirector.CarMaterial` caen al error
+shader.
+
+Fix: quitar los comentarios. Reescrito via `SerializedObject` en el Editor y
+verificado: `count=9`, `[7] URP/Unlit` y `[8] URP/Lit` resuelven. (Los builds
+manuales de Windows via `Fase4RaceScene.BuildWebGL` no tenian el bug porque ese
+metodo hace su propio add/remove de shaders por-build.)
