@@ -537,10 +537,11 @@ visibles en el demo público. 6.3 y 6.4 son extensiones, no requisito de cierre.
 El contrato exige **tres capas de documentación estratificadas** (no duplicadas). Escribe la
 narrativa una vez y destílala hacia las otras.
 
-- [ ] **`README.md` — manual de réplica, público y autocontenido.** Que alguien clone el
+- [x] **`README.md` — manual de réplica, público y autocontenido.** Que alguien clone el
       repo y levante el demo por su cuenta con `docker run`, sin orquestación externa.
       Estructura: qué es · arquitectura (+ diagrama) · prerrequisitos · build · run ·
-      variables de entorno · uso · limitaciones.
+      variables de entorno · uso · limitaciones. — escrito 2026-09-10 (PR #6), en inglés,
+      sin mencionar la infra que hospeda el demo ni hostnames internos.
 
       ⚠️ **Límite duro del contrato**: el README **no menciona** alexisalulema.com, el
       gateway, el JWT, la nube que lo hospeda ni hostnames internos. No es una omisión
@@ -549,12 +550,12 @@ narrativa una vez y destílala hacia las otras.
       qué la app no lleva auth ni TLS, dilo en abstracto: *"diseñada para correr detrás de
       un reverse proxy que termina TLS y hace la autenticación"*.
 
-- [ ] **`docs/Devlog.md` — bitácora interna cronológica.** Actividades, decisiones,
+- [x] **`docs/Devlog.md` — bitácora interna cronológica.** Actividades, decisiones,
       problemas y cómo se resolvieron. Aquí SÍ puedes anotar cualquier detalle, incluida la
       plataforma. Es la memoria para reconstruir el proyecto después. Regístralo **durante**
-      el trabajo, no al final.
+      el trabajo, no al final. — mantenido al día desde Fase 0; sigue vivo, no "cierra".
 
-- [ ] **`window.DEMO_INFO` — subconjunto destilado in-demo.** Ya cubierto en Fase 5.
+- [x] **`window.DEMO_INFO` — subconjunto destilado in-demo.** Ya cubierto en Fase 5.
 
 - [ ] **Post técnico** (blog en alexisalulema.com): recorrido del diseño — por qué RL para
       control y LLM para estrategia, qué se intentó y no funcionó (recompensas que se
