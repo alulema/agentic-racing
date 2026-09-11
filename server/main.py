@@ -21,6 +21,7 @@ prefix.
 
 from __future__ import annotations
 
+import logging
 import mimetypes
 import os
 import time
@@ -35,6 +36,17 @@ from pydantic import ValidationError
 from guardrails import GuardrailState
 from schemas import LlmStatus, StrategyEnvelope, StrategyRequest, StrategyResponse
 from strategy import OllamaError, build_messages, call_ollama, clamp_radio, parse_response
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("agentic_racing")
+
+# --- hand-off identity (DEMO_INTEGRATION.md) --------------------------------
+# The ephemeral infra injects these two env vars per §2.2 of CLAUDE.md and
+# docs/handoff.md. The app declares no secrets and is stateless, so it does
+# nothing else with them — they exist purely so a log line can be correlated
+# back to the provisioning event that created this pod.
+PROJECT_ID = os.environ.get("PROJECT_ID", "unknown")
+DEMO_SLOT = os.environ.get("DEMO_SLOT", "unknown")
 
 # --- static serving (unchanged from Fase 0) --------------------------------
 
@@ -72,6 +84,10 @@ BREAKER_COOLDOWN_S = float(os.environ.get("STRATEGY_BREAKER_COOLDOWN_S", "60"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info(
+        "agentic-racing starting: project_id=%s demo_slot=%s static_dir=%s",
+        PROJECT_ID, DEMO_SLOT, STATIC_DIR,
+    )
     app.state.http = httpx.AsyncClient()
     app.state.guard = GuardrailState(
         max_concurrent=MAX_CONCURRENT,
@@ -196,6 +212,8 @@ async def health(request: Request) -> JSONResponse:
             "llm": guard.snapshot(),
             "ollama_reachable": await _ollama_reachable(request),
             "static_dir": str(STATIC_DIR),
+            "project_id": PROJECT_ID,
+            "demo_slot": DEMO_SLOT,
         }
     )
 

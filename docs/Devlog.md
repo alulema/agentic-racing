@@ -2722,3 +2722,36 @@ shaders internos de URP — `Hidden/CoreSRP/CoreCopy`, `StencilDitherMaskSeed`,
 `HDRDebugView` — inocuos, no afectan el material de la pista ni los autos). Chip
 LLM "online", una linea real del estratega con tag `LLM` y latencia ~21 s,
 marcadores de curva `T1` visibles.
+
+### Fase 7: README publico + PROJECT_ID/DEMO_SLOT + colores tokenizados (2026-09-10)
+
+Tras el merge de PR #5, se revisaron los 3 pendientes identificados al leer
+`DEMO_INTEGRATION.md` antes de pasar a la integracion. Rama
+`fase-7-integracion`, PR #6:
+
+- `README.md` nuevo: manual de replica publico (que es, arquitectura +
+  diagrama Mermaid, prerrequisitos, build desde imagen publicada vs. desde
+  fuente, run, tabla de env vars, uso de query params, limitaciones honestas).
+  Sin mencionar la infra que hospeda el demo ni hostnames internos (limite
+  duro de CLAUDE.md SS7).
+- `server/main.py`: ahora lee y loguea `PROJECT_ID`/`DEMO_SLOT` al arranque y
+  los expone en `/api/health` — antes `docs/handoff.md` afirmaba que la app
+  los leia pero el codigo no los tocaba en absoluto.
+- `web/style.css` + `web/index.html`: los colores de estado `#e0a34a`/
+  `#d05a5a` (chip LLM, tag "fallback" del radio) estaban hardcodeados,
+  violando CLAUDE.md SS3 ("nunca colores hardcodeados"). Ahora
+  `var(--color-warning, #e0a34a)` / `var(--color-error, #d05a5a)`, con los
+  tokens agregados al `:root` de fallback.
+
+Verificado local: `server/tests` 10/10, `TestClient` contra `/api/health`
+confirma `project_id`/`demo_slot` en la respuesta y en el log de arranque.
+CI del PR #6 verde (run `34551395518`): `build-webgl` 11m41s, `test-editmode`
+7m29s, `build-and-push-image` compila.
+
+Nota operativa (no bloqueante): las anotaciones de `test-editmode` en esta
+corrida muestran que GameCI no pudo devolver el seat de licencia Personal de
+la corrida anterior ("Failed to return the Personal license seat after 4
+attempts") y cayo a activar con `UNITY_EMAIL`/`UNITY_PASSWORD` como
+respaldo — el job igual paso completo. Si una corrida futura falla con "no
+available seats", liberar el seat a mano en id.unity.com (CLAUDE.md SS11 ya
+avisa de este riesgo de licencia en CI).
