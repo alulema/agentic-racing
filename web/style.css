@@ -24,27 +24,38 @@ body {
   padding: 1rem 0 2rem;
 }
 
-/* #viewport is the shared positioning box: on desktop #panels (HUD + team
-   radio) sits absolutely over #unity-container, same box; on phones the
-   @media rules at the end of this file pull #panels into normal flow so the
-   track is never covered. */
-#viewport { position: relative; }
+/* #viewport: canvas on the left sized to the viewport height, HUD + team
+   radio in a scrollable column on the right — the same shape at every
+   width, desktop included (it started as the phone-landscape fix; turned
+   out to read better everywhere than panels floating on top of the track).
+   The one exception is narrow-portrait phones, overridden below: there the
+   canvas is a stacked, wide side column doesn't fit. */
+#viewport {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 34%);
+  gap: 0.75rem;
+  align-items: start;
+}
 
 #unity-container {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  height: calc(100vh - 1.5rem);
+  height: calc(100svh - 1.5rem); /* Safari: dvh/svh exclude the address bar */
   background: #000;
   border-radius: var(--radius);
   overflow: hidden;
 }
 
 #panels {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;      /* the canvas keeps keyboard/pointer focus */
-  overflow: hidden;          /* a tall radio stack clips instead of spilling */
-  border-radius: var(--radius);
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: calc(100vh - 1.5rem);
+  max-height: calc(100svh - 1.5rem);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 #unity-canvas { width: 100%; height: 100%; display: block; }
@@ -61,14 +72,10 @@ body {
 /* --- top HUD: lap + classification ------------------------------------- */
 
 #hud {
-  position: absolute;
-  top: 0.75rem;
-  left: 0.75rem;
-  right: 0.75rem;
   display: flex;
-  gap: 0.75rem;
-  align-items: flex-start;
-  pointer-events: none;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: auto;
 }
 
 .hud-card {
@@ -81,9 +88,10 @@ body {
   backdrop-filter: blur(4px);
 }
 
-#lap-card { font-size: 1rem; font-weight: 700; letter-spacing: 0.02em; }
+#lap-card { font-size: 1rem; font-weight: 700; letter-spacing: 0.02em; align-self: flex-start; }
 
-#standings { min-width: 260px; }
+#standings { width: 100%; overflow-x: auto; }
+#standings td { padding: 0.1rem 0.25rem; }
 #standings table { border-collapse: collapse; width: 100%; }
 #standings td { padding: 0.1rem 0.35rem; white-space: nowrap; }
 #standings .pos { color: var(--color-text-dim, #9aa); text-align: right; width: 1.4em; }
@@ -113,14 +121,11 @@ body {
 /* --- team radio feed -------------------------------------------------- */
 
 #radio {
-  position: absolute;
-  right: 0.75rem;
-  bottom: 0.75rem;
-  width: min(360px, 70%);
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  pointer-events: none;
+  pointer-events: auto;
 }
 
 #radio h2 {
@@ -417,90 +422,45 @@ body {
   color: var(--color-accent);
 }
 
-/* --- phones: the panels leave the canvas ------------------------------ */
-/* Overlaying HUD + a 6-line radio on a 390 px-wide canvas hides the whole
-   track (seen on an iPhone 13 Pro, both orientations). Below 900 px the
-   panels drop into normal flow instead: under the canvas in portrait, in a
-   scrollable side column in landscape. Unity's camera fits whatever aspect
-   ratio the canvas ends up with (RaceSceneBootstrap.LateUpdate). */
-
+/* --- narrow phones: smaller HUD text -------------------------------- */
+/* The grid/scroll-column layout above (canvas + side column) is now the
+   default at every width and orientation — it started as the fix for
+   landscape phones (a 6-line radio panel floating over a 390 px canvas hid
+   the whole track on an iPhone 13 Pro) and turned out to read better
+   everywhere than panels overlaid on the track, desktop included. */
 @media (max-width: 899px) {
-  /* Bottom padding clears the site's "About this demo" pill (demo-panel.js,
-     fixed bottom-left) so the last radio line can scroll above it. */
-  #stage { padding: 0.5rem 0 4.5rem; }
   .hud-card { font-size: 0.75rem; }
+}
+
+/* --- narrow portrait phones: stack instead of side-by-side -------------- */
+/* There isn't room for a meaningful side column in portrait on a phone, so
+   this is the one place that overrides back to a single stacked column:
+   a square canvas on top, HUD/standings/radio flowing below it. Unity's
+   camera fits whatever aspect ratio the canvas ends up with
+   (RaceSceneBootstrap.LateUpdate). */
+@media (max-width: 899px) and (orientation: portrait) {
+  /* Bottom padding clears the site's "About this demo" pill (demo-panel.js,
+     fixed bottom-left) so the last radio line can scroll above it instead of
+     under it. */
+  #stage { padding: 0.5rem 0 4.5rem; }
+
+  #viewport { display: block; }
+
+  #unity-container { height: auto; aspect-ratio: 1 / 1; }
 
   #panels {
-    position: static;
-    pointer-events: auto;
+    max-height: none;
     overflow: visible;
-    border-radius: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
     margin-top: 0.5rem;
     padding: 0 0.5rem;
   }
 
-  #hud {
-    position: static;
-    pointer-events: auto;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-  }
-  #lap-card { flex: none; }
-  #standings { flex: 1 1 200px; min-width: 0; overflow-x: auto; }
-  #standings td { padding: 0.1rem 0.25rem; }
+  #hud { flex-direction: column; }
+  #lap-card { align-self: flex-start; }
 
-  #radio {
-    position: static;
-    width: auto;
-    pointer-events: auto;
-  }
   #radio-feed {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
     max-height: 42vh;          /* ~3 lines visible; older ones scroll */
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
   }
-  .radio-msg { flex: none; }
-}
-
-/* Portrait phone: a squarer canvas so the oval isn't a thin strip. */
-@media (max-width: 899px) and (orientation: portrait) {
-  #unity-container { aspect-ratio: 1 / 1; }
-  /* Lap card above the standings: side by side they don't fit in 390 px and
-     the directive column gets cut off. */
-  #hud { flex-direction: column; }
-  #lap-card { align-self: flex-start; }
-  #standings { flex: none; width: 100%; }
-}
-
-/* Landscape phone: canvas on the left sized to the viewport height, the
-   panels in a scrollable column on the right. */
-@media (max-width: 899px) and (orientation: landscape) {
-  #viewport {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(220px, 38%);
-    gap: 0.5rem;
-    align-items: start;
-  }
-  #unity-container {
-    aspect-ratio: auto;
-    height: calc(100vh - 1.5rem);
-    height: calc(100svh - 1.5rem);
-  }
-  #panels {
-    margin-top: 0;
-    padding: 0 0.5rem 0 0;
-    max-height: calc(100vh - 1.5rem);
-    max-height: calc(100svh - 1.5rem);
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-  #hud { flex-direction: column; }
-  #standings { flex: none; width: 100%; }
-  #radio-feed { max-height: none; overflow: visible; }
 }
