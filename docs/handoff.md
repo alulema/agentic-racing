@@ -57,6 +57,9 @@ the image (final image ~4.5 GB, of which ~2 GB is the baked model).
   right `Content-Encoding`).
 - `POST /api/strategy` — the strategist proxy. Always HTTP 200 with an envelope
   (`status: ok | fallback`).
+- `POST /api/explain` — Fase 6.1: re-explain a past directive on request (the
+  decision-log "ask the strategist to re-explain" button). Same guardrails as
+  `/api/strategy`, always HTTP 200 with an envelope (`status: ok | fallback`).
 - `GET /api/health` — LLM mode (`online` / `offline`), p95 latency, call /
   rejected / failed counts, `ollama_reachable`.
 - `GET /api/ping` — heartbeat.
