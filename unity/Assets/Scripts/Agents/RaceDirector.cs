@@ -265,6 +265,9 @@ namespace AgenticRacing.Agents
             strat.UseLlm = useLlm;
             strat.Context = BuildContext(st, member);
             strat.Map = directiveMap;
+            // §6.2: grade each attack/push/defend bet against what actually
+            // happens (EvaluateAttempts, called from FixedUpdate).
+            strat.DecisionMade += rec => OnDecision(st, rec);
 
             // Grid pose BEFORE activation, so RaceAgent.OnEpisodeBegin (which in
             // RaceMode re-seeds its progress tracker from the current pose the
@@ -413,6 +416,11 @@ namespace AgenticRacing.Agents
 
             // 2. classification + position-change events.
             UpdateClassification();
+
+            // §6.2: was the tactical bet behind the current directive a hit or a
+            // miss? Graded on ground truth (position, incidents), independent of
+            // whether the flag is out — a car can still be mid-attempt at the line.
+            EvaluateAttempts();
 
             // No more strategy calls once the chequered flag is out — the running
             // order just settles as backmarkers finish.
@@ -571,6 +579,100 @@ namespace AgenticRacing.Agents
             st.Strategist.AddNote(
                 $"L{Mathf.Max(1, st.Crossings)}: {reason}, recovered (+{softRecoverPenaltySeconds:F0}s)");
             st.Strategist.Notify(StrategyEvent.Incident, BuildSnapshot(st, StrategyEvent.Incident));
+        }
+
+        // -- §6.2: errors visible, not just wins ------------------------------
+        //
+        // A directive is a bet the strategist made with incomplete information
+        // (§6.2 in CLAUDE.md). This grades it against what the race director can
+        // actually see happen — position and incidents, the same ground truth
+        // BuildSnapshot already tracks — and reports the result through the same
+        // team-radio feed as any other line, win or loss alike.
+
+        /// <summary>How long an attack/push/defend bet gets before it's graded a
+        /// stalemate rather than a hit or a miss.</summary>
+        private const float attemptWindowSeconds = 22f;
+
+        /// <summary>New directive applied (<see cref="RaceStrategist.DecisionMade"/>):
+        /// start tracking the bet it represents, if any. A kept directive (nothing
+        /// applied) or a switch to <c>conserve</c> closes out whatever was open —
+        /// changing your mind isn't a failure, it's just not a bet anymore.</summary>
+        private void OnDecision(CarState st, StrategyRecord rec)
+        {
+            if (!rec.Applied) return;
+
+            var kind = rec.Directive.Kind;
+            if ((kind == DirectiveKind.Attack || kind == DirectiveKind.Push) && !string.IsNullOrEmpty(rec.TargetRival))
+            {
+                st.AttemptKind = kind;
+                st.AttemptTarget = rec.TargetRival;
+            }
+            else if (kind == DirectiveKind.Defend)
+            {
+                st.AttemptKind = kind;
+                st.AttemptTarget = null;
+            }
+            else
+            {
+                st.AttemptKind = null; // conserve, or attack/push with no named target: nothing to grade
+                return;
+            }
+
+            st.AttemptSince = Time.time;
+            st.AttemptStartPosition = st.Position;
+            st.AttemptIncidentsAtStart = st.Incidents;
+        }
+
+        /// <summary>Grade every open bet against the current classification —
+        /// called once per physics tick, after positions are up to date.</summary>
+        private void EvaluateAttempts()
+        {
+            foreach (var st in _cars)
+            {
+                if (st.AttemptKind == null) continue;
+                if (st.Finished) { st.AttemptKind = null; continue; }
+
+                var kind = st.AttemptKind.Value;
+                float elapsed = Time.time - st.AttemptSince;
+                bool incidentHappened = st.Incidents > st.AttemptIncidentsAtStart;
+
+                if (kind == DirectiveKind.Attack || kind == DirectiveKind.Push)
+                {
+                    if (st.Position < st.AttemptStartPosition)
+                        Resolve(st, true, $"Move on {st.AttemptTarget} completed — up to P{st.Position}.");
+                    else if (incidentHappened)
+                        Resolve(st, false, $"Contact trying to pass {st.AttemptTarget} — the move didn't come off.");
+                    else if (st.Position > st.AttemptStartPosition)
+                        Resolve(st, false, $"Lost a place going for {st.AttemptTarget} — dropped to P{st.Position}.");
+                    else if (elapsed > attemptWindowSeconds)
+                        Resolve(st, false, $"Couldn't make the move on {st.AttemptTarget} stick.");
+                }
+                else // Defend
+                {
+                    if (st.Position > st.AttemptStartPosition)
+                        Resolve(st, false, "Lost the place — the defence didn't hold.");
+                    else if (elapsed > attemptWindowSeconds)
+                        Resolve(st, true, "Held the position — defence worked.");
+                }
+            }
+        }
+
+        private void Resolve(CarState st, bool success, string note)
+        {
+            st.AttemptKind = null;
+            st.Strategist.AddNote((success ? "OK: " : "FAIL: ") + note);
+            if (!emitOverlay) return;
+
+            var j = new JsonBuilder();
+            j.Obj()
+                .Field("type", "radio:outcome")
+                .Field("carId", st.CarId)
+                .Field("name", st.Name)
+                .Field("color", st.Color)
+                .Field("success", success)
+                .Field("note", note)
+                .EndObj();
+            JsBridge.Send(j.ToString());
         }
 
         private void UpdateClassification()
@@ -732,6 +834,15 @@ namespace AgenticRacing.Agents
             public float RivalInRangeSince = -1f;
             public bool RivalRangeArmed = true;
             public readonly Dictionary<int, float> PrevRivalGap = new();
+
+            // §6.2: the tactical bet the current directive represents, graded
+            // against what actually happens on track (see EvaluateAttempts).
+            // Null = no open bet (conserve, or the last one already resolved).
+            public DirectiveKind? AttemptKind;
+            public string AttemptTarget;      // target_rival for attack/push; null for defend
+            public float AttemptSince;
+            public int AttemptStartPosition;
+            public int AttemptIncidentsAtStart;
         }
     }
 

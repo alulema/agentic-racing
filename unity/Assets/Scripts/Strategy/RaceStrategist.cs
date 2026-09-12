@@ -60,6 +60,7 @@ namespace AgenticRacing.Strategy
         private const int GlobalInFlightCap = 2;
 
         private readonly List<string> _notes = new();
+        private int _seq; // per-car decision counter, for Fase 6.1 record ids
         private float _cooldownUntil;
         private bool _callInProgress;
         private bool _pending;
@@ -128,6 +129,11 @@ namespace AgenticRacing.Strategy
             _callInProgress = true;
             _cooldownUntil = Time.time + CooldownSeconds;
 
+            // Built whenever there's a context to build it from, even on the
+            // heuristic path — Fase 6.1/6.2 want to show exactly what the
+            // strategist *would have* seen, not hide it because no call was made.
+            string requestJson = Context != null ? BuildRequestBody(Context, snapshot, _notes) : null;
+
             var box = new Box();
 
             if (!UseLlm || Context == null)
@@ -139,17 +145,15 @@ namespace AgenticRacing.Strategy
             }
             else
             {
-                yield return PostLlm(snapshot, box);
+                yield return PostLlm(requestJson, snapshot, box);
             }
 
-            Apply(box.Value, evt, snapshot);
+            Apply(box.Value, evt, snapshot, requestJson);
             _callInProgress = false;
         }
 
-        private IEnumerator PostLlm(TelemetrySnapshot snapshot, Box box)
+        private IEnumerator PostLlm(string body, TelemetrySnapshot snapshot, Box box)
         {
-            string body = BuildRequestBody(Context, snapshot, _notes);
-
             using var req = new UnityWebRequest(StrategyApi.Url(), "POST")
             {
                 uploadHandler = new UploadHandlerRaw(System.Text.Encoding.UTF8.GetBytes(body)),
@@ -197,7 +201,7 @@ namespace AgenticRacing.Strategy
                 radio, s.rationale, "ok", env.latency_ms);
         }
 
-        private void Apply(StrategyDecision d, StrategyEvent evt, TelemetrySnapshot snapshot)
+        private void Apply(StrategyDecision d, StrategyEvent evt, TelemetrySnapshot snapshot, string requestJson)
         {
             if (d.Applied) CurrentDirective = d.Directive;
 
@@ -205,12 +209,14 @@ namespace AgenticRacing.Strategy
             string radio = !string.IsNullOrEmpty(d.Radio)
                 ? d.Radio
                 : "Staying on plan — no new call from the pit wall.";
+            string id = $"{Context?.CarId ?? DisplayName}#{++_seq}";
 
-            EmitRadio(status, d, radio);
+            EmitRadio(id, status, d, radio, evt, snapshot, requestJson);
             AddNote(NoteFor(evt, d, snapshot));
 
             DecisionMade?.Invoke(new StrategyRecord
             {
+                Id = id,
                 CarId = Context?.CarId ?? DisplayName,
                 Event = evt,
                 Applied = d.Applied,
@@ -221,17 +227,30 @@ namespace AgenticRacing.Strategy
                 Rationale = d.Rationale,
                 LatencyMs = d.LatencyMs,
                 Snapshot = snapshot,
+                RequestJson = requestJson,
             });
         }
 
-        private void EmitRadio(string status, StrategyDecision d, string radio)
+        /// <summary>Pushes the team-radio line to the DOM overlay, plus — Fase 6.1
+        /// — everything needed to inspect this decision later without a second
+        /// round trip: the event/lap it answered, which engine produced it, the
+        /// longer <c>rationale</c> that's never shown live, and (when there was a
+        /// context to build one from) the *exact* request body sent, embedded
+        /// verbatim under <c>request</c>. The client is stateless (§2.2), so this
+        /// bitácora lives only in the browser's memory — see web/overlay.js.</summary>
+        private void EmitRadio(string id, string status, StrategyDecision d, string radio,
+            StrategyEvent evt, TelemetrySnapshot snapshot, string requestJson)
         {
             var j = new JsonBuilder();
             j.Obj()
                 .Field("type", "radio:msg")
+                .Field("id", id)
                 .Field("carId", Context?.CarId ?? DisplayName)
                 .Field("name", DisplayName)
                 .Field("color", ColorHex)
+                .Field("event", EventName(evt))
+                .Field("lap", snapshot.Lap)
+                .Field("engine", !UseLlm || Context == null ? "heuristic" : "llm")
                 .Field("directive", CurrentDirective.Kind.ToString().ToLowerInvariant())
                 .Field("aggression", LevelLabel(CurrentDirective.Aggression))
                 .Field("risk", LevelLabel(CurrentDirective.RiskTolerance));
@@ -241,8 +260,10 @@ namespace AgenticRacing.Strategy
                 foreach (int c in d.FocusCorners) j.Val(c);
             j.EndArr();
             j.Field("radio", radio).Field("status", status);
+            if (!string.IsNullOrEmpty(d.Rationale)) j.Field("rationale", d.Rationale);
             if (!string.IsNullOrEmpty(d.Reason) && d.Reason != "ok") j.Field("reason", d.Reason);
             if (d.LatencyMs > 0) j.Field("latencyMs", d.LatencyMs);
+            if (requestJson != null) j.Raw("request", requestJson); else j.Null("request");
             j.EndObj();
 
             JsBridge.Send(j.ToString());
@@ -394,6 +415,7 @@ namespace AgenticRacing.Strategy
     /// <summary>Full record of one strategy call for Fase 6.1 persistence.</summary>
     public sealed class StrategyRecord
     {
+        public string Id; // "<car_id>#<n>" — matches the id in the radio:msg the DOM stores
         public string CarId;
         public StrategyEvent Event;
         public bool Applied;
@@ -404,5 +426,6 @@ namespace AgenticRacing.Strategy
         public string Rationale;
         public int LatencyMs;
         public TelemetrySnapshot Snapshot;
+        public string RequestJson; // exact context+telemetry body sent, or null (heuristic, no context)
     }
 }

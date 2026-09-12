@@ -16,8 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import strategy as strategy_mod  # noqa: E402
 from main import app  # noqa: E402
-from schemas import RaceContext, Telemetry  # noqa: E402
-from strategy import build_messages, clamp_radio  # noqa: E402
+from schemas import RaceContext, StrategyResponse, Telemetry  # noqa: E402
+from strategy import build_explain_messages, build_messages, clamp_radio  # noqa: E402
 
 
 def _ctx(**over) -> dict:
@@ -102,6 +102,16 @@ def test_system_prefix_is_stable_across_events():
     assert a[1] != b[1], "user message carries the per-event telemetry"
     assert "T1 medium left" in a[0]["content"]
     assert "P4-Smooth" in a[0]["content"]
+
+
+def test_explain_reuses_the_same_system_prefix():
+    ctx = RaceContext(**_ctx())
+    a = build_messages(ctx, Telemetry(**_telemetry()))
+    b = build_explain_messages(
+        ctx, Telemetry(**_telemetry()), StrategyResponse(**json.loads(GOOD_REPLY))
+    )
+    assert a[0] == b[0], "explain must share the strategy call's exact system prefix (§6.7 KV-cache)"
+    assert a[1] != b[1]
 
 
 def test_clamp_radio():
@@ -210,6 +220,89 @@ def test_ping():
         out = c.get("/api/ping").json()
         assert out["ok"] is True
         assert "ts" in out
+
+
+# --- Fase 6.1: /api/explain -------------------------------------------------
+
+
+def _explain_body(**over) -> dict:
+    base = {"context": _ctx(), "telemetry": _telemetry(), "directive": json.loads(GOOD_REPLY)}
+    base.update(over)
+    return base
+
+
+def test_explain_returns_prose(client, monkeypatch):
+    async def fake(*_a, **_kw):
+        return "car_01 was fading and the gap had closed under a second, so the move was on.", 900.0
+
+    monkeypatch.setattr("main.call_ollama", fake)
+    r = client.post("/api/explain", json=_explain_body())
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "ok"
+    assert "car_01" in data["explanation"]
+    assert data["reason"] is None
+
+
+def test_explain_uses_free_text_not_json_format(client, monkeypatch):
+    captured = {}
+
+    async def fake(*_a, **kw):
+        captured.update(kw)
+        return "Held the gap, no need to force it.", 500.0
+
+    monkeypatch.setattr("main.call_ollama", fake)
+    client.post("/api/explain", json=_explain_body())
+    assert captured.get("json_mode") is False
+
+
+def test_explain_ollama_error_falls_back(client, monkeypatch):
+    async def boom(*_a, **_kw):
+        raise strategy_mod.OllamaError("timeout")
+
+    monkeypatch.setattr("main.call_ollama", boom)
+    r = client.post("/api/explain", json=_explain_body())
+    data = r.json()
+    assert data["status"] == "fallback"
+    assert data["reason"].startswith("ollama_error")
+
+
+def test_explain_empty_reply_is_fallback(client, monkeypatch):
+    async def fake(*_a, **_kw):
+        return "   ", 300.0
+
+    monkeypatch.setattr("main.call_ollama", fake)
+    r = client.post("/api/explain", json=_explain_body())
+    data = r.json()
+    assert data["status"] == "fallback"
+    assert data["reason"] == "empty_reply"
+
+
+def test_explain_does_not_move_the_strategy_reject_rate(client, monkeypatch):
+    # §6.8's "% rejected" stat is about directive calls only — a viewer
+    # mashing "re-explain" must not dilute or inflate it.
+    async def fake(*_a, **_kw):
+        return "Because the gap was closing fast.", 400.0
+
+    monkeypatch.setattr("main.call_ollama", fake)
+    before = client.get("/api/health").json()["llm"]["calls"]
+    for _ in range(3):
+        client.post("/api/explain", json=_explain_body())
+    after = client.get("/api/health").json()["llm"]["calls"]
+    assert after == before
+
+
+def test_explain_blocked_when_breaker_open(monkeypatch):
+    async def boom(*_a, **_kw):
+        raise strategy_mod.OllamaError("timeout")
+
+    monkeypatch.setattr("main.call_ollama", boom)
+    with TestClient(app) as c:
+        for _ in range(3):
+            c.post("/api/strategy", json=_body())  # trip the shared breaker
+        out = c.post("/api/explain", json=_explain_body()).json()
+        assert out["status"] == "fallback"
+        assert out["reason"] == "offline"
 
 
 def test_health_shape():

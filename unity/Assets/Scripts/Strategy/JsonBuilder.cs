@@ -128,6 +128,20 @@ namespace AgenticRacing.Strategy
             return this;
         }
 
+        /// <summary>Embed an already-built JSON value verbatim as the value of
+        /// <paramref name="key"/> — no re-escaping. Used by Fase 6.1 traceability
+        /// to nest the exact request body sent to the strategist inside the
+        /// <c>radio:msg</c> the DOM overlay stores, without paying to parse it
+        /// back out of a string first. <paramref name="rawJson"/> must already be
+        /// valid JSON (or null, written as the JSON null).</summary>
+        public JsonBuilder Raw(string key, string rawJson)
+        {
+            Key(key);
+            _sb.Append(string.IsNullOrEmpty(rawJson) ? "null" : rawJson);
+            _needSep = true;
+            return this;
+        }
+
         public override string ToString() => _sb.ToString();
 
         // -- internals ------------------------------------------------------

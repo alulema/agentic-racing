@@ -11,8 +11,8 @@
  * whole DOM layer be checked in a plain browser with no build.
  */
 
-import { initOverlay } from "./overlay.js?v=6";
-import { startMock } from "./mock.js?v=6";
+import { initOverlay } from "./overlay.js?v=7";
+import { startMock } from "./mock.js?v=7";
 
 const overlay = initOverlay();
 const params = new URLSearchParams(location.search);
@@ -44,6 +44,9 @@ function route(msg) {
       break;
     case "radio:msg":
       overlay.onRadio(msg);
+      break;
+    case "radio:outcome":
+      overlay.onOutcome(msg);
       break;
     case "race:end":
       raceActive = false;

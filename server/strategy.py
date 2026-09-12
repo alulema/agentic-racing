@@ -27,6 +27,9 @@ from schemas import RaceContext, StrategyResponse, Telemetry
 # Hard cap on output tokens (§7.3): radio is 15 words, rationale 40, so ~150
 # tokens is plenty and keeps latency bounded.
 NUM_PREDICT = 150
+# Fase 6.1 re-explain: free text, a bit more room than the directive call, but
+# still bounded (§7.3) — this is a manual, out-of-band ask, not a race event.
+EXPLAIN_NUM_PREDICT = 200
 # Low but non-zero: some variety in the radio wording, stable directives.
 TEMPERATURE = 0.4
 
@@ -73,10 +76,13 @@ def _corner_map(context: RaceContext) -> str:
     return "Circuit map (numbered corners, in lap order): " + ", ".join(parts)
 
 
-def build_messages(context: RaceContext, telemetry: Telemetry) -> list[dict]:
-    """Stable system message + variable user message (§6.7)."""
+def _system_message(context: RaceContext) -> str:
+    """The stable prefix (§6.7): identical for every call this car makes,
+    whether it's asked to decide (build_messages) or to explain a past
+    decision (build_explain_messages) — same bytes, so Ollama's KV-cache for
+    this car's prefix is shared across both call kinds."""
 
-    system = "\n\n".join(
+    return "\n\n".join(
         [
             _SYSTEM_RULES,
             f"Circuit: {context.track_name}, {context.track_length_m:.0f} m, "
@@ -85,12 +91,42 @@ def build_messages(context: RaceContext, telemetry: Telemetry) -> list[dict]:
             f"Your car: {context.car_id}. Pilot profile: {context.pilot_profile}",
         ]
     )
+
+
+def build_messages(context: RaceContext, telemetry: Telemetry) -> list[dict]:
+    """Stable system message + variable user message (§6.7)."""
+
     user = (
         "Telemetry for this event — decide the directive:\n"
         + telemetry.model_dump_json(indent=None)
     )
     return [
-        {"role": "system", "content": system},
+        {"role": "system", "content": _system_message(context)},
+        {"role": "user", "content": user},
+    ]
+
+
+def build_explain_messages(
+    context: RaceContext, telemetry: Telemetry, directive: StrategyResponse
+) -> list[dict]:
+    """Fase 6.1: ask the same strategist to elaborate on a call it already
+    made, given the same telemetry it had at the time. Free text, not the
+    directive schema — this never drives the car, it only feeds the decision
+    log's "re-explain" button."""
+
+    user = (
+        "Earlier, given the telemetry below, you made this call:\n"
+        + directive.model_dump_json(indent=None)
+        + "\n\nTelemetry at the time:\n"
+        + telemetry.model_dump_json(indent=None)
+        + "\n\nExplain, in 2-3 short sentences (max 60 words), why that was the "
+        "right call. Be concrete: reference the actual gaps, positions, "
+        "corners or rivals in the telemetry above — do not restate the "
+        "directive fields, and do not repeat the radio line verbatim. Plain "
+        "prose only: no JSON, no bullet points, no preamble."
+    )
+    return [
+        {"role": "system", "content": _system_message(context)},
         {"role": "user", "content": user},
     ]
 
@@ -107,23 +143,30 @@ async def call_ollama(
     keep_alive: str,
     messages: list[dict],
     timeout_s: float,
+    json_mode: bool = True,
+    num_predict: int = NUM_PREDICT,
 ) -> tuple[str, float]:
-    """One ``/api/chat`` call with forced-JSON output. Returns
-    ``(content, latency_ms)``. Raises :class:`OllamaError` on transport failure."""
+    """One ``/api/chat`` call. Returns ``(content, latency_ms)``. Raises
+    :class:`OllamaError` on transport failure.
+
+    ``json_mode`` forces JSON output for the directive call (§6.4/§6.8); the
+    Fase 6.1 explain call passes ``json_mode=False`` — it wants a couple of
+    prose sentences, not a schema, so there is nothing to force."""
 
     payload = {
         "model": model,
         "messages": messages,
         "stream": False,
+        "options": {"num_predict": num_predict, "temperature": TEMPERATURE},
+        "keep_alive": keep_alive,
+    }
+    if json_mode:
         # format="json" only (not the full JSON Schema): schema-constrained
         # decoding roughly doubles latency on a CPU-only 3B. The prompt already
         # spells out every field and enum, and parse_response validates the
         # reply against the schema — a bad one is discarded whole (§6.8). Expect
         # a somewhat higher discard rate; that is the trade §2.5/§6.8 anticipate.
-        "format": "json",
-        "options": {"num_predict": NUM_PREDICT, "temperature": TEMPERATURE},
-        "keep_alive": keep_alive,
-    }
+        payload["format"] = "json"
     started = time.perf_counter()
     try:
         resp = await client.post(
