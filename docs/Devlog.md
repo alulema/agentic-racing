@@ -2937,3 +2937,26 @@ pudo bajar la ventana de ~1200 px en este WM): pista sin tapar en ambas
 orientaciones, tabla completa sin cortar, sin overflow horizontal
 (`scrollWidth == clientWidth` en ambas), desktop identico. Pendiente que el
 dueño lo confirme en el iPhone real — no tengo un dispositivo iOS.
+
+### El layout de teléfono landscape pasa a ser el layout por defecto (2026-09-13)
+
+El dueño del proyecto probó el fix móvil (PR #11) en su iPhone real y le
+gustó tanto el resultado en landscape (canvas a la izquierda ocupando la
+altura del viewport, columna con scroll a la derecha con LAP + tabla +
+radio) que pidió usar ese mismo layout también en desktop, en vez del
+overlay absoluto de siempre.
+
+Cambio (`web/style.css`, sin tocar Unity/JS): lo que antes vivía solo bajo
+`@media (max-width: 899px) and (orientation: landscape)` ahora es el
+comportamiento por defecto de `#viewport`/`#unity-container`/`#panels`/`#hud`/
+`#radio` a cualquier ancho. La única media query que queda es
+`(max-width: 899px) and (orientation: portrait)`, que sigue siendo la
+excepción: ahí no entra una columna lateral razonable, así que se apila
+(canvas cuadrado arriba, HUD/tabla/radio en flujo debajo).
+
+Verificado en Chrome vía iframes de 1440x820 y 1100x700 (esta sesión no
+puede achicar la ventana real del WM por debajo de ~1200px de ancho, sigue
+siendo la misma limitación de siempre): layout idéntico al de landscape
+phone, sin overflow horizontal, y el modal de Fase 6.1 (Decision log / clic
+en una línea de radio) sigue funcionando igual encima del nuevo layout.
+Portrait de teléfono no se tocó — sigue como en PR #11.
