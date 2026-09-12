@@ -23,10 +23,16 @@
       --radius: 8px;
     }
   </style>
-  <link rel="stylesheet" href="style.css?v=7" />
+  <link rel="stylesheet" href="style.css?v=8" />
 </head>
 <body>
   <div id="stage">
+    <!-- #viewport is the positioning box for both the canvas and the panels.
+         Desktop: #panels sits absolutely on top of #unity-container (same box).
+         Phone (style.css @media): #panels drops into normal flow — below the
+         canvas in portrait, beside it in landscape — so the track is never
+         covered. Unity's camera fits any aspect ratio (RaceSceneBootstrap). -->
+    <div id="viewport">
     <div id="unity-container">
       <canvas id="unity-canvas" tabindex="-1"></canvas>
       <div id="load-bar"></div>
@@ -36,7 +42,9 @@
       <div id="race-over"></div>
 
       <div id="llm-status">LLM ?</div>
+    </div>
 
+    <div id="panels">
       <div id="hud" style="visibility:hidden">
         <div class="hud-card" id="lap-card">LAP – / –</div>
         <div class="hud-card" id="standings">
@@ -68,6 +76,7 @@
           </div>
         </div>
       </div>
+    </div>
     </div>
   </div>
 
