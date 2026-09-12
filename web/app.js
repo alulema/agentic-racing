@@ -12,10 +12,16 @@
  */
 
 import { initOverlay } from "./overlay.js?v=7";
-import { startMock } from "./mock.js?v=7";
+import { startMock } from "./mock.js?v=8";
+import { initExperiment } from "./experiment.js?v=7";
 
 const overlay = initOverlay();
 const params = new URLSearchParams(location.search);
+
+// Fase 6.3 mixed-field data collection — opt-in, local use only. See
+// web/experiment.js for the methodology and web/README-derived instructions
+// for how to drive an unattended run.
+const experiment = params.get("experiment") === "1" ? initExperiment(params) : null;
 
 // --- Unity -> DOM message router -----------------------------------------
 
@@ -38,6 +44,7 @@ function route(msg) {
       raceActive = true;
       startHeartbeat();
       overlay.onStart(msg);
+      experiment?.onStart(msg);
       break;
     case "race:tick":
       overlay.onTick(msg);
@@ -52,6 +59,7 @@ function route(msg) {
       raceActive = false;
       stopHeartbeat();
       overlay.onEnd(msg);
+      experiment?.onEnd(msg);
       break;
     default:
       console.debug("[app] unhandled message type:", msg.type);

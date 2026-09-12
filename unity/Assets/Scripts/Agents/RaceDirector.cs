@@ -429,6 +429,7 @@ namespace AgenticRacing.Agents
                 foreach (var st in _cars)
                 {
                     if (st.Position == st.PrevPosition) continue;
+                    if (st.Position < st.PrevPosition) st.Overtakes++; // §6.3: gained a place
                     st.Strategist.Notify(StrategyEvent.PositionChange, BuildSnapshot(st, StrategyEvent.PositionChange));
                     st.PrevPosition = st.Position;
                 }
@@ -788,6 +789,10 @@ namespace AgenticRacing.Agents
             if (st.Finished) j.Field("done", true);
             if (withDirective)
                 j.Field("directive", st.Strategist.CurrentDirective.Kind.ToString().ToLowerInvariant());
+            // §6.3 secondary metrics — cheap enough to always include (race:tick and
+            // race:end share this writer); the mixed-field harness (web/experiment.js)
+            // only reads them off race:end.
+            j.Field("overtakes", st.Overtakes).Field("incidents", st.Incidents);
             j.EndObj();
         }
 
@@ -819,6 +824,7 @@ namespace AgenticRacing.Agents
 
             public int Position;
             public int PrevPosition;
+            public int Overtakes;   // §6.3 secondary metric: places gained over the race
             public int Incidents;
             public bool Finished;
             public int FinishOrder;   // 1..N — order the chequered flag was taken

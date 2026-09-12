@@ -8,14 +8,24 @@
  * fallback radio line, exactly as the C# strategist will.
  */
 
+// `profile` is the free-text pilot description (goes into the strategy
+// payload's `pilot_profile`); `pilot` on the race:start message is the
+// engine tag ("llm" | "heuristic") — same field name and meaning as the real
+// C# RaceDirector.EmitRaceStart, so anything reading race:start (e.g.
+// web/experiment.js) sees the same shape whether it's mock or the real build.
 const CARS = [
-  { id: "car_01", name: "P2-LateBrake", color: "#e0563b", pilot: "Attack bias, brakes very late, aggressive corner exit" },
-  { id: "car_02", name: "P5-Aggro", color: "#e0a33b", pilot: "Attack bias, runs wheel-to-wheel, high risk tolerance" },
-  { id: "car_03", name: "P1-Balanced", color: "#3bb0e0", pilot: "Neutral line, consistent, no strong tendency" },
-  { id: "car_04", name: "P6-Steady", color: "#8a7be0", pilot: "Push bias but conservative braking, very repeatable" },
-  { id: "car_05", name: "P3-Defensive", color: "#5ad07a", pilot: "Defend bias, holds the inside line, brakes early" },
-  { id: "car_06", name: "P4-Smooth", color: "#c77bd0", pilot: "Conserve bias, smooth inputs, strong in slow corners" },
+  { id: "car_01", name: "P2-LateBrake", color: "#e0563b", profile: "Attack bias, brakes very late, aggressive corner exit" },
+  { id: "car_02", name: "P5-Aggro", color: "#e0a33b", profile: "Attack bias, runs wheel-to-wheel, high risk tolerance" },
+  { id: "car_03", name: "P1-Balanced", color: "#3bb0e0", profile: "Neutral line, consistent, no strong tendency" },
+  { id: "car_04", name: "P6-Steady", color: "#8a7be0", profile: "Push bias but conservative braking, very repeatable" },
+  { id: "car_05", name: "P3-Defensive", color: "#5ad07a", profile: "Defend bias, holds the inside line, brakes early" },
+  { id: "car_06", name: "P4-Smooth", color: "#c77bd0", profile: "Conserve bias, smooth inputs, strong in slow corners" },
 ];
+
+// The only two cars the mock actually drives through /api/strategy (see the
+// lap-end loop below) — everyone else is the "heuristic" side for anything
+// (like web/experiment.js) that groups by engine.
+const LLM_CAR_IDS = new Set(["car_03", "car_04"]);
 
 const CORNERS = [
   { index: 1, direction: "left", severity: "medium" },
@@ -42,7 +52,12 @@ export function startMock(route) {
     progress: -i * 0.03,
   }));
 
-  route({ type: "race:start", seed: 12345, laps: LAPS, cars: CARS });
+  route({
+    type: "race:start",
+    seed: 12345,
+    laps: LAPS,
+    cars: CARS.map((c) => ({ ...c, pilot: LLM_CAR_IDS.has(c.id) ? "llm" : "heuristic" })),
+  });
 
   let elapsed = 0;
   let lap = 1;
@@ -110,7 +125,7 @@ async function askStrategy(car, state, lap, finishing, route) {
   const body = {
     context: {
       car_id: car.id,
-      pilot_profile: `${car.name}: ${car.pilot}`,
+      pilot_profile: `${car.name}: ${car.profile}`,
       track_name: "Rounded Oval (mock)",
       track_length_m: 1994,
       total_laps: LAPS,
