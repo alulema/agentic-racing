@@ -2904,3 +2904,36 @@ posicion se come la diferencia entre `llm` y `heuristic`, el resultado
 correcto a reportar es "no hay efecto detectable" — no forzar una conclusion
 positiva. Ver CLAUDE.md SS6.3 y SS7 (evaluacion de paper corto condicionada a
 que 6.3 de señal real).
+
+### Layout responsive para telefonos (2026-09-13)
+
+Reporte del dueño del proyecto tras probar el demo publico con su familia:
+en un iPhone 13 Pro funciona, pero los paneles (Team Radio, Posiciones)
+tapan la pista — en landscape no se ve nada, en portrait el radio solo ya
+oculta pista y tabla. Causa: los paneles van con `position: absolute` sobre
+el canvas, y en 390 px de ancho un radio de 6 lineas mide mas que el canvas
+entero (16:10 → 244 px de alto).
+
+Fix (`web/index.html` + `web/style.css`, sin tocar Unity ni JS):
+- Nuevo `#viewport` que envuelve `#unity-container` y un nuevo `#panels`
+  (HUD + radio + modal de traza). En desktop `#panels` es `position:absolute;
+  inset:0` sobre el canvas — misma caja, mismo look que antes (regresion
+  verificada). Los paneles ya no son hijos del canvas, asi pueden salir de
+  el por CSS.
+- `@media (max-width: 899px)`: `#panels` pasa a flujo normal. Portrait: canvas
+  1:1 (mas alto para el ovalo — la camara ya se ajusta a cualquier aspecto en
+  `RaceSceneBootstrap.LateUpdate`), abajo LAP + tabla a ancho completo, abajo
+  el radio con `max-height: 42vh` y scroll propio. Landscape: grid de dos
+  columnas, canvas a la izquierda a la altura del viewport, columna derecha
+  con scroll con LAP + tabla + radio. Padding inferior extra para que el
+  ultimo mensaje pase por encima de la pastilla "Acerca de" de
+  `demo-panel.js` (externa, fixed bottom-left).
+- Bug de paso: `#stage { width: min(1100px, 100vw) }` — `100vw` incluye la
+  barra de scroll vertical y forzaba un scroll horizontal de 15 px en
+  telefonos. Ahora `100%`.
+
+Verificado en Chrome con iframes de 390x844 y 844x390 (`resize_window` no
+pudo bajar la ventana de ~1200 px en este WM): pista sin tapar en ambas
+orientaciones, tabla completa sin cortar, sin overflow horizontal
+(`scrollWidth == clientWidth` en ambas), desktop identico. Pendiente que el
+dueño lo confirme en el iPhone real — no tengo un dispositivo iOS.
