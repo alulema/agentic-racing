@@ -477,21 +477,33 @@ proyectos comunes. Lo que no es común es la combinación **auditable, honesta y
 No agregues las cuatro piezas a la vez — cada una es independiente y se puede cortar si
 el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la última).
 
-- [ ] **6.1 — Trazabilidad de decisiones (prioridad alta, bajo esfuerzo)**
+- [x] **6.1 — Trazabilidad de decisiones (prioridad alta, bajo esfuerzo)**
   Cada llamada al LLM ya genera telemetría + respuesta — persístela completa (no solo
   el campo `radio`) en una bitácora por auto y por carrera. UI: clic sobre cualquier
   mensaje de radio en el replay muestra el input exacto que tenía el LLM en ese momento
   y permite pedirle que re-explique su propia decisión con ese contexto. Esto es lo que
   convierte el demo de "se ve bien" a "se puede auditar" — es la pieza más alineada con
-  la conversación actual sobre interpretabilidad de agentes.
+  la conversación actual sobre interpretabilidad de agentes. — `RaceStrategist.EmitRadio`
+  embebe el `context`+`telemetry` exacto (vía `JsonBuilder.Raw`) más `rationale` en cada
+  `radio:msg`; `web/overlay.js` lo guarda en un `traceStore` client-side (hasta 300
+  decisiones, no solo las 6 visibles en vivo) detrás de un panel "Decision log" — clic en
+  cualquier línea (viva o del log) abre el detalle con el input exacto y, si fue una
+  llamada LLM válida, un botón "Ask the strategist to re-explain" que llama a
+  `POST /api/explain` (nuevo endpoint, mismos guardrails de §7) con ese mismo contexto.
+  Verificado end-to-end con el modelo real: explicación coherente referenciando datos
+  reales de la telemetría.
 
-- [ ] **6.2 — Errores visibles, no solo victorias (prioridad alta, bajo esfuerzo)**
+- [x] **6.2 — Errores visibles, no solo victorias (prioridad alta, bajo esfuerzo)**
   No filtres ni "arregles" las decisiones tácticas que salen mal. Cuando un adelantamiento
   arriesgado falla o una directiva de "atacar" resulta en pérdida de posición, regístralo
   explícitamente en la bitácora como una decisión fallida (no como un bug). Represéntalo
   en la UI igual que un acierto — sin dramatizarlo ni ocultarlo. El punto es demostrar que
   el agente razona con información incompleta y a veces se equivoca, en vez de vender una
-  demo donde la IA siempre gana.
+  demo donde la IA siempre gana. — `RaceDirector.OnDecision`/`EvaluateAttempts` trackean la
+  apuesta táctica detrás de cada directiva `attack`/`push` (con `target_rival`) o `defend`
+  contra lo que pasa de verdad en pista (posición, incidentes, ventana de ~22 s), y la
+  resuelven como acierto o fallo por igual — `radio:outcome` en el mismo feed de radio,
+  mismo estilo visual, solo un tag "result" distinto.
 
 - [ ] **6.3 — Comparación medible: campo mixto (prioridad media, esfuerzo medio)**
 

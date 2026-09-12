@@ -28,6 +28,8 @@ const LAPS = 6;
 const TICK_MS = 500;
 const LAP_MS = 9000; // compressed lap for the mock
 
+let seq = 0; // Fase 6.1: decision ids, "<car_id>#<n>" like the real strategist
+
 export function startMock(route) {
   const state = CARS.map((c, i) => ({
     ...c,
@@ -154,6 +156,8 @@ async function askStrategy(car, state, lap, finishing, route) {
     env = { status: "fallback", reason: "network", llm: {} };
   }
 
+  const id = `${car.id}#${++seq}`;
+
   if (env.status === "ok" && env.strategy) {
     const s = env.strategy;
     car.directive = s.directive;
@@ -161,31 +165,60 @@ async function askStrategy(car, state, lap, finishing, route) {
     car.risk = s.risk_tolerance;
     route({
       type: "radio:msg",
+      id,
       carId: car.id,
       name: car.name,
       color: car.color,
+      event: body.telemetry.event,
+      lap: body.telemetry.lap,
+      engine: "llm",
       directive: s.directive,
       aggression: s.aggression,
       risk: s.risk_tolerance,
       targetRival: s.target_rival,
       focusCorners: s.focus_corners,
       radio: s.radio,
+      rationale: s.rationale,
       status: "ok",
       latencyMs: env.latency_ms,
+      request: body,
     });
+
+    // Dev-only: simulate a §6.2 outcome for the UI, since the mock has no real
+    // race director grading attempts. Not shipped behaviour.
+    if (s.target_rival && (s.directive === "attack" || s.directive === "push")) {
+      setTimeout(() => {
+        const success = Math.random() < 0.5;
+        route({
+          type: "radio:outcome",
+          carId: car.id,
+          name: car.name,
+          color: car.color,
+          success,
+          note: success
+            ? `Move on ${s.target_rival} completed — up to P${car.pos}.`
+            : `Couldn't make the move on ${s.target_rival} stick.`,
+        });
+      }, 3000 + Math.random() * 2000);
+    }
   } else {
     // Same path the C# strategist takes on a rejected/offline/timeout reply:
     // keep the current directive, surface it on the radio.
     route({
       type: "radio:msg",
+      id,
       carId: car.id,
       name: car.name,
       color: car.color,
+      event: body.telemetry.event,
+      lap: body.telemetry.lap,
+      engine: "llm",
       directive: car.directive,
       radio: "Staying on plan — no new call from the pit wall.",
       status: "fallback",
       reason: env.reason || "unavailable",
       latencyMs: env.latency_ms,
+      request: body,
     });
   }
 }

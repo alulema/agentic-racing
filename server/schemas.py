@@ -123,3 +123,27 @@ class StrategyEnvelope(BaseModel):
     reason: Optional[str] = None
     latency_ms: int = 0
     llm: LlmStatus
+
+
+class ExplainRequest(BaseModel):
+    """Fase 6.1 traceability: ask the strategist to elaborate, in plain words,
+    on a directive it already returned. The client (the DOM overlay's decision
+    log, not the race itself) resends the exact ``context``/``telemetry`` it
+    got that call with and the ``directive`` that came back — the server never
+    stored them (§2.2: stateless), so there is nothing to look up here."""
+
+    context: RaceContext
+    telemetry: Telemetry
+    directive: StrategyResponse
+
+
+class ExplainEnvelope(BaseModel):
+    """Always HTTP 200, same spirit as :class:`StrategyEnvelope`. This is a
+    manual, out-of-band ask (a viewer clicked a decision in the log), not a
+    race event, so a fallback here never affects driving — worst case the
+    modal just says the strategist can't re-explain right now."""
+
+    status: Literal["ok", "fallback"]
+    explanation: Optional[str] = None
+    reason: Optional[str] = None
+    latency_ms: int = 0

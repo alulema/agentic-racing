@@ -23,7 +23,7 @@
       --radius: 8px;
     }
   </style>
-  <link rel="stylesheet" href="style.css?v=6" />
+  <link rel="stylesheet" href="style.css?v=7" />
 </head>
 <body>
   <div id="stage">
@@ -45,13 +45,33 @@
       </div>
 
       <div id="radio">
-        <h2>Team radio <span id="radio-age"></span></h2>
+        <h2>Team radio <span id="radio-age"></span>
+          <button id="trace-open" type="button" title="Decision log (Fase 6.1) — every strategist call, with the exact input it saw">log</button>
+        </h2>
         <div id="radio-feed"></div>
+      </div>
+
+      <!-- Fase 6.1 traceability: click any radio line (or "log") to see the
+           exact context/telemetry the strategist had and, for a live LLM
+           call, ask it to re-explain the decision. -->
+      <div id="trace-modal" hidden>
+        <div id="trace-backdrop"></div>
+        <div id="trace-panel" role="dialog" aria-label="Decision log">
+          <div id="trace-head">
+            <span id="trace-title">Decision log</span>
+            <button id="trace-close" type="button" aria-label="Close">×</button>
+          </div>
+          <div id="trace-list"></div>
+          <div id="trace-detail" hidden>
+            <button id="trace-back" type="button">‹ back to log</button>
+            <div id="trace-detail-body"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 
-  <script type="module" src="app.js?v=6"></script>
+  <script type="module" src="app.js?v=7"></script>
 
   <!-- "About this demo" panel (DEMO_INTEGRATION.md). Define DEMO_INFO first,
        then load the widget from the site origin. Purely additive. -->

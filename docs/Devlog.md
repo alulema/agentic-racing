@@ -2755,3 +2755,64 @@ attempts") y cayo a activar con `UNITY_EMAIL`/`UNITY_PASSWORD` como
 respaldo — el job igual paso completo. Si una corrida futura falla con "no
 available seats", liberar el seat a mano en id.unity.com (CLAUDE.md SS11 ya
 avisa de este riesgo de licencia en CI).
+
+### Fase 6 pasos 1-2: trazabilidad de decisiones + errores visibles (2026-09-12)
+
+Con PR #5 y #6 ya en `main`, seguimos con Fase 6 (SS6.1 + SS6.2 del checklist —
+las unicas obligatorias para cerrar la fase). Rama `fase-6-diferenciadores`.
+
+**6.1 — Trazabilidad.** `RaceStrategist.Run` ahora construye el body de
+contexto+telemetria (`BuildRequestBody`) siempre que haya `Context`, incluso
+en el camino heuristico — asi Fase 6.2 puede mostrar "esto es lo que el
+estratega hubiera visto" en vez de simplemente no decir nada. `Apply`/
+`EmitRadio` le agregan un id (`car_id#n`), el evento, la vuelta, `engine`
+(`llm`|`heuristic`) y `rationale` al `radio:msg`, y embeben el request exacto
+via un metodo nuevo `JsonBuilder.Raw(key, json)` (sin re-escapar). Del lado
+del overlay (`web/overlay.js`), cada `radio:msg` con `id` se guarda en un
+`traceStore` (hasta 300 decisiones — no solo las 6 que caben en el ticker en
+vivo) y la fila se vuelve clickeable. Un boton "log" en el header abre un
+modal con **todo** el historial de la carrera, no solo lo visible; clic en
+cualquier fila (viva o del log) muestra el detalle: que decidio, la
+`rationale` que nunca se ve en vivo, y el JSON exacto que recibio el LLM.
+
+Para la re-explicacion se agrego `POST /api/explain` (`server/main.py` +
+`server/schemas.py` + `server/strategy.py`): el cliente reenvia el mismo
+`context`/`telemetry`/`directive` que ya tiene (el server sigue sin estado,
+SS2.2) y el proxy le pide al mismo modelo, con el mismo prefijo estable de
+sistema (`_system_message` factorizado para que `build_messages` y
+`build_explain_messages` compartan bytes y KV-cache), que elabore 2-3
+oraciones en texto libre (`json_mode=False` en `call_ollama`, nuevo parametro).
+Comparte los guardrails de SS7 con `/api/strategy` (mismo cortacircuitos,
+mismo rate-limit, misma compuerta de concurrencia) pero **no** incrementa
+`guard.calls`/`rejected` — esos contadores son la tasa de descarte de SS6.8 y
+un re-explain manual no es una decision de carrera. Probado end-to-end contra
+el modelo real (`llama3.2:3b` local): ~9-20 s de latencia en esta maquina
+compartida, explicacion coherente que referencia datos reales de la
+telemetria (gap, rival, curva) sin repetir el `radio` textual. 17/17 tests de
+`server/tests` (10 nuevos: prefijo compartido, texto libre, fallback por
+error/vacio/breaker-abierto, no contamina `guard.calls`).
+
+**6.2 — Errores visibles.** `RaceDirector` ahora se suscribe al
+`DecisionMade` que `RaceStrategist` ya emitia desde Fase 4 (documentado como
+"para que Fase 6.1 lo persista" pero sin nadie escuchandolo hasta ahora).
+`OnDecision` abre una "apuesta" cuando la directiva aplicada es `attack`/
+`push` con `target_rival`, o `defend`: guarda posicion e incidentes de
+partida. `EvaluateAttempts`, llamado cada `FixedUpdate` tras
+`UpdateClassification`, la resuelve como acierto o fallo contra la
+clasificacion real — gano una posicion, la perdio, hubo contacto con el
+objetivo, o se acabo la ventana (~22 s) sin nada — y lo manda al feed de
+radio via un mensaje nuevo `radio:outcome`, **el mismo canal y el mismo
+estilo visual** que cualquier linea de radio (`web/overlay.js` lo pinta con
+un tag "result" y texto en cursiva, nada de rojo/verde dramatico). El
+resultado tambien se anota en la bitacora del propio estratega
+(`AddNote("OK: ..."/"FAIL: ...")`) asi que su proxima llamada ve el
+desenlace de su propia apuesta anterior — cierra el loop de memoria
+lap-over-lap que SS6.3 ya pedia con el ejemplo literal de nota
+("intento de adelantamiento a car_01 en turn 7 fallido, perdi posicion").
+
+Verificado: compilacion limpia en el Editor Linux (batchmode, 0 errores CS),
+EditMode 20/20, y una corrida completa en `?mock=1` contra el proxy real
+(Chrome): 12 decisiones en el log de una carrera de 6 vueltas/2 autos, clic
+en una linea LLM abre el detalle + JSON completo, "Ask the strategist to
+re-explain" devuelve una explicacion real, filas `radio:outcome` renderizando
+en el feed. Sin errores de consola.

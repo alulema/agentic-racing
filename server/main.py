@@ -34,8 +34,23 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ValidationError
 
 from guardrails import GuardrailState
-from schemas import LlmStatus, StrategyEnvelope, StrategyRequest, StrategyResponse
-from strategy import OllamaError, build_messages, call_ollama, clamp_radio, parse_response
+from schemas import (
+    ExplainEnvelope,
+    ExplainRequest,
+    LlmStatus,
+    StrategyEnvelope,
+    StrategyRequest,
+    StrategyResponse,
+)
+from strategy import (
+    EXPLAIN_NUM_PREDICT,
+    OllamaError,
+    build_explain_messages,
+    build_messages,
+    call_ollama,
+    clamp_radio,
+    parse_response,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("agentic_racing")
@@ -75,6 +90,9 @@ OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "24h")
 STRATEGY_TIMEOUT_S = float(os.environ.get("STRATEGY_TIMEOUT_S", "45"))
 # §7.5: at most this many calls reach Ollama at once (1-2 on a CPU-only pod).
 MAX_CONCURRENT = int(os.environ.get("STRATEGY_MAX_CONCURRENT", "1"))
+# Fase 6.1 re-explain (§ below): a manual, out-of-band ask — never blocks a
+# race event — so it can afford a shorter timeout than the directive call.
+EXPLAIN_TIMEOUT_S = float(os.environ.get("STRATEGY_EXPLAIN_TIMEOUT_S", "30"))
 # Circuit breaker (§7.1). The p95 threshold has to sit above the model's real
 # latency on the target box, or a working-but-slow LLM is stuck "offline"; the
 # radio just lags the race by that much (§2.5 accepts this).
@@ -179,6 +197,87 @@ async def strategy(req: StrategyRequest, request: Request) -> JSONResponse:
         parsed.radio = clamp_radio(parsed.radio)
         return _envelope(
             guard, status="ok", strategy=parsed, latency_ms=int(latency_ms)
+        )
+
+
+# --- Fase 6.1: re-explain a past decision -----------------------------------
+#
+# Called from the DOM overlay's decision log (web/overlay.js), never from the
+# race loop itself — a viewer clicked a stored radio message and wants the
+# strategist to elaborate. The client resends the exact context/telemetry/
+# directive it already has (the server is stateless, §2.2, and never stored
+# them). It shares the strategy endpoint's guardrails: same breaker, same
+# per-IP limit, same concurrency gate — it is still a call against the one
+# CPU-only Ollama instance six strategists are already sharing (§7).
+
+
+def _explain_envelope(
+    guard: GuardrailState,
+    *,
+    status: str,
+    explanation: str | None = None,
+    reason: str | None = None,
+    latency_ms: int = 0,
+) -> JSONResponse:
+    env = ExplainEnvelope(
+        status=status,  # type: ignore[arg-type]
+        explanation=explanation,
+        reason=reason,
+        latency_ms=latency_ms,
+    )
+    return JSONResponse(env.model_dump())
+
+
+@app.post("/api/explain")
+async def explain(req: ExplainRequest, request: Request) -> JSONResponse:
+    guard: GuardrailState = request.app.state.guard
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not guard.allow_ip(client_ip):
+        return _explain_envelope(guard, status="fallback", reason="rate_limited")
+
+    if guard.offline:
+        return _explain_envelope(guard, status="fallback", reason="offline")
+
+    slot = await guard.acquire_slot()
+    if slot is None:
+        return _explain_envelope(guard, status="fallback", reason="busy")
+
+    messages = build_explain_messages(req.context, req.telemetry, req.directive)
+
+    async with slot:
+        # Deliberately NOT guard.calls += 1 here: that counter feeds the
+        # "% rejected" stat on the strategy chip (§6.8 data for the technical
+        # post), and an explain call has nothing to reject — it's free text.
+        # record_success/record_failure DO run below: the breaker's p95 window
+        # is about real load on the shared Ollama process, and this is real
+        # load on it too.
+        try:
+            content, latency_ms = await call_ollama(
+                request.app.state.http,
+                base_url=OLLAMA_URL,
+                model=OLLAMA_MODEL,
+                keep_alive=OLLAMA_KEEP_ALIVE,
+                messages=messages,
+                timeout_s=EXPLAIN_TIMEOUT_S,
+                json_mode=False,
+                num_predict=EXPLAIN_NUM_PREDICT,
+            )
+        except OllamaError as exc:
+            guard.record_failure()
+            return _explain_envelope(
+                guard, status="fallback", reason=f"ollama_error: {exc}"[:200]
+            )
+
+        guard.record_success(latency_ms)
+
+        text = clamp_radio(content.strip(), max_words=70) if content.strip() else ""
+        if not text:
+            return _explain_envelope(
+                guard, status="fallback", reason="empty_reply", latency_ms=int(latency_ms)
+            )
+        return _explain_envelope(
+            guard, status="ok", explanation=text, latency_ms=int(latency_ms)
         )
 
 
