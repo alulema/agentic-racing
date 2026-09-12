@@ -505,7 +505,7 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   resuelven como acierto o fallo por igual — `radio:outcome` en el mismo feed de radio,
   mismo estilo visual, solo un tag "result" distinto.
 
-- [ ] **6.3 — Comparación medible: campo mixto (prioridad media, esfuerzo medio)**
+- [~] **6.3 — Comparación medible: campo mixto (prioridad media, esfuerzo medio)**
 
   **Cómo NO hacerlo** (era el diseño original de este documento y estaba mal): correr la
   misma seed dos veces, una con todos los autos usando LLM y otra con ninguno, y comparar
@@ -533,6 +533,27 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
 
   Esta es la fase que genera los datos de los que depende la Fase 7. Si la recortas, el
   reporte técnico pierde su parte cuantitativa.
+
+  **[~] Estado (2026-09-12)**: el mecanismo de campo mixto (rotación balanceada de
+  parrilla + asignación LLM/heurística vía `?race=N`) ya existía desde Fase 4 en
+  `RaceDirector` — no hubo que construirlo. Lo que se agregó: contador de
+  adelantamientos por auto (`CarState.Overtakes`), y un modo experimento opt-in
+  (`web/experiment.js`, `?experiment=1&cycles=N`) que corre carreras desatendidas,
+  registra posición/gap/adelantamientos/incidentes por auto y motor (`llm`/`heuristic`)
+  en `localStorage`, avanza solo al siguiente `?race=` al terminar cada una, y al
+  llegar al target muestra un resumen (media ± desviación estándar por grupo) y ofrece
+  descargar el dataset crudo. Verificado end-to-end con `?mock=1` (ciclo completo de
+  6 carreras, reload correcto, resumen y descarga funcionando).
+
+  **Adaptación de metodología, documentada honestamente en el propio harness**: `?seed=`
+  ya no varía el trazado desde el pivote a Camino A (`FixedRoundedRect` ignora el RNG),
+  así que "muchas seeds" se redefinió como "muchos ciclos de `raceIndex`" — la única
+  fuente de variación real que queda es la estocasticidad del LLM (temperature 0.4 +
+  latencia real), no el trazado.
+
+  **Falta correr el experimento de verdad** (18 carreras = 3 ciclos, ~1.5-2h de reloj
+  real, local — nunca contra el pod efímero de producción, que se cae a los ~60 min) y
+  volcar el resultado a la Fase 7. Instrucciones en `docs/Devlog.md`.
 
 - [ ] **6.4 — Presupuesto de decisiones limitado (prioridad baja, esfuerzo medio-alto)**
   El jefe de equipo recibe un número fijo de "cambios de estrategia" disponibles por

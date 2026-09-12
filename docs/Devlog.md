@@ -2816,3 +2816,91 @@ EditMode 20/20, y una corrida completa en `?mock=1` contra el proxy real
 en una linea LLM abre el detalle + JSON completo, "Ask the strategist to
 re-explain" devuelve una explicacion real, filas `radio:outcome` renderizando
 en el feed. Sin errores de consola.
+
+### Verificacion en vivo del demo publico + Fase 6.3 armada (2026-09-12)
+
+**Verificacion en produccion.** El dueño del proyecto coordino la publicacion
+con personal-website y paso la URL real (`https://demo02.alexisalulema.com/`
+con token de sesion). Abierta en Chrome: carga perfecto detras del gateway,
+carrera arranca sola, chip "LLM online", lineas reales del estrategia con tag
+`LLM`, y se vieron en vivo tanto `✓ RESULT — Held the position — defence
+worked.` como `✗ RESULT — Lost the place — the defence didn't hold.` — Fase
+6.1 y 6.2 confirmadas funcionando en produccion, no solo en CI/local.
+
+**Fase 6.3 — arrancada.** Plan acordado con el dueño del proyecto: redefinir
+"muchas seeds" (ya no aplica — `FixedRoundedRect` ignora el RNG desde el
+pivote a Camino A) como "muchos ciclos de `raceIndex`", correr 18 carreras
+(3 ciclos), y dejarlo armado para que el dueño lo corra por su cuenta en vez
+de correrlo yo en la sesion (18 carreras x ~5-8 min = 1.5-2.5h de reloj real).
+
+Al revisar el codigo: el mecanismo de campo mixto **ya existia desde Fase 4**
+en `RaceDirector.StartRace` — `member = (slot + raceIndex) % 6`,
+`useLlm = (member + raceIndex) % 6 < llmCars` (`llmCars = 3`). Verificado por
+algebra: en un ciclo completo de `raceIndex = 0..5`, cada uno de los 6 pilotos
+pasa exactamente 3 carreras con LLM y 3 con heuristica, y visita cada uno de
+los 6 puestos de parrilla exactamente una vez — un diseño balanceado tipo
+cuadrado latino, exactamente lo que pide "rotar parrilla" + "rotar piloto".
+No hubo que tocar eso.
+
+Lo que si se agrego:
+- `CarState.Overtakes` (adelantamientos por auto, no existia) — incrementado
+  en `RaceDirector.FixedUpdate` donde ya se detectaba `PositionChange`.
+- `WriteClassRow` ahora incluye `overtakes` e `incidents` por auto (antes solo
+  en la clasificacion visual, ahora tambien disponible para el harness).
+- `web/experiment.js` (nuevo, opt-in via `?experiment=1&cycles=N`): registra
+  cada `race:end` en `localStorage` (posicion, gap, adelantamientos,
+  incidentes, motor `llm`/`heuristic` por auto — el motor sale de `pilot` en
+  `race:start`, ya existente desde Fase 4), avanza solo con `?race=` al
+  siguiente indice cuando termina una carrera (la carrera arranca sola al
+  cargar, asi que esto corre desatendido), y al llegar al target calcula y
+  muestra media ± desviacion estandar de posicion por grupo, mas totales de
+  adelantamientos/incidentes, y ofrece descargar el dataset crudo en JSON.
+  Tambien re-renderiza el resumen si se recarga la pagina despues de terminar
+  (no se pierde el resultado por un refresh accidental).
+- `web/mock.js`: `pilot` (texto de perfil) paso a llamarse `profile`, y ahora
+  emite un `pilot` real (`"llm"`/`"heuristic"`) en `race:start`, igual que el
+  C# real — asi `?mock=1&experiment=1` prueba el harness completo sin Unity.
+
+Verificado end-to-end en `?mock=1&experiment=1&cycles=1` (target=6): ciclo de
+race index 0→1 confirmado por reload real (una carrera mock completa, ~1 min);
+el resto del ciclo fast-forwardeado inyectando estado en `localStorage` para
+validar el camino de cierre sin esperar 5 carreras mock mas — resumen
+correcto (`llm: n=12 pos=3.50±0.50 ...`, `heuristic: n=24 ...`), boton de
+descarga funcionando (el primer intento con el boton en bottom-left chocaba
+con el widget externo "Acerca de" de `demo-panel.js`; se movio a bottom-right).
+20/20 EditMode, 17/17 server tests sin regresiones.
+
+**Instrucciones para correr el experimento real** (dueño del proyecto, no
+Claude — el pod de produccion tiene ~60 min de vida maxima y se caeria a
+mitad; esto se corre local):
+
+```bash
+# 1. Build de la imagen local (o `docker pull ghcr.io/alulema/agentic-racing:latest`
+#    si ya esta publicada con este cambio — build local si aun no).
+docker build -f docker/Dockerfile -t agentic-racing:local .
+
+# 2. Correrla
+docker run -p 8080:8080 -e PROJECT_ID=agentic-racing -e DEMO_SLOT=demo01 agentic-racing:local
+
+# 3. Abrir en el navegador (deja la pestaña en primer plano — una pestaña en
+#    segundo plano throttlea requestAnimationFrame y la simulacion se pausa):
+#    http://localhost:8080/?experiment=1&cycles=3&race=0
+```
+
+Dejarlo corriendo ~2 horas con la pestaña activa. Un contador arriba a la
+izquierda muestra "Fase 6.3 experiment — race N/18". Al terminar, aparece el
+resumen (media ± SD de posicion por `llm`/`heuristic`, mas adelantamientos e
+incidentes totales) y un boton azul "Download results.json" abajo a la
+derecha — ese archivo es el dataset crudo (una fila por auto por carrera,
+18*6 = 108 filas) para el analisis cuantitativo de la Fase 7.
+
+Si se corta a mitad (se cierra la pestaña, se reinicia el contenedor): abrir
+la misma URL sin `&race=0` — retoma solo desde donde quedo (el progreso vive
+en `localStorage` del navegador, sobrevive recargas). Para descartar un
+intento a medias y arrancar de cero: agregar `&reset=1` una vez.
+
+Interpretacion honesta pendiente (Fase 7): si la desviacion estandar de
+posicion se come la diferencia entre `llm` y `heuristic`, el resultado
+correcto a reportar es "no hay efecto detectable" — no forzar una conclusion
+positiva. Ver CLAUDE.md SS6.3 y SS7 (evaluacion de paper corto condicionada a
+que 6.3 de señal real).
