@@ -551,16 +551,24 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   fuente de variación real que queda es la estocasticidad del LLM (temperature 0.4 +
   latencia real), no el trazado.
 
-  **[x] Corrido (2026-09-13)**: 18 carreras reales (3 ciclos), local. Dataset en
-  `docs/experiments/fase6.3-mixed-field-18races.json`. Resultado — no "sin efecto
-  detectable", sino un efecto **grande, consistente y contrario a lo esperado**: el
-  grupo `heuristic` termina en promedio **2.09 ± 0.91**, el grupo `llm` **4.91 ± 1.02**
-  (escala 1-6) — ~2.8 posiciones de diferencia, repetida sin excepción en los 6 pilotos
-  individualmente. Hipótesis no confirmada: el modelo sesga hacia directivas
-  conservadoras (`agg:low risk:low`) más que la heurística fija, lo que le cuesta ritmo
-  directo (§6.5). Detalle completo, tabla y nota metodológica sobre las métricas
-  secundarias en `docs/Devlog.md`. Este es el dato duro para la Fase 7 — un hallazgo
-  honesto, no forzado hacia una narrativa positiva.
+  **[x] Corrido dos veces (2026-09-13)**: 18 carreras reales (3 ciclos) cada vez, local.
+  Primera corrida (`docs/experiments/fase6.3-mixed-field-18races.json`): efecto
+  **grande, consistente y contrario a lo esperado** — `heuristic` 2.09 ± 0.91,
+  `llm` 4.91 ± 1.02 (escala 1-6), repetido sin excepción en los 6 pilotos. Segunda
+  corrida, instrumentada decisión-por-decisión
+  (`docs/experiments/fase6.3-mixed-field-18races-v2-instrumented.json`): el efecto se
+  repite aún más marcado (`heuristic` 2.00 ± 0.82, `llm` 5.00 ± 0.82), y la hipótesis del
+  sesgo conservador queda **confirmada con datos**, no solo observación cualitativa:
+  filtrando a respuestas LLM realmente frescas (`status:"ok"`), el modelo elige
+  `agg:low`/`risk:low` ~45% de las veces y `defend` el 76%, mientras la heurística fija
+  **nunca** elige `low` en ninguno de los dos canales y prefiere `attack` (53%). Segundo
+  hallazgo no anticipado: solo 41.6% de las decisiones de autos LLM fueron respuestas
+  frescas — el 98% del resto cayó en fallback por `reason:"busy"` (el semáforo de
+  concurrencia, no JSON inválido ni timeout), así que el efecto medido combina el sesgo
+  del modelo *y* cuánto tiempo esa directiva (fresca o vieja) queda vigente por falta de
+  cupo. Detalle completo, tablas y el siguiente paso barato (probar
+  `STRATEGY_MAX_CONCURRENT=3` antes de tocar el modelo) en `docs/Devlog.md`. Dato duro
+  para la Fase 7 — hallazgo honesto, no forzado hacia una narrativa positiva.
 
 - [ ] **6.4 — Presupuesto de decisiones limitado (prioridad baja, esfuerzo medio-alto)**
   El jefe de equipo recibe un número fijo de "cambios de estrategia" disponibles por

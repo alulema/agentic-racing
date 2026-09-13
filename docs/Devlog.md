@@ -3061,3 +3061,63 @@ pieza de trabajo) en vez de mergear el resultado de las 18 carreras sin la
 instrumentación y volver después. Falta: correr las 18 carreras de nuevo
 (el dataset anterior no tiene `decisions`) para confirmar o refutar la
 hipótesis con datos.
+
+### Fase 6.3: hipótesis confirmada con datos — y un segundo hallazgo (2026-09-13)
+
+Segunda corrida de 18 carreras (3 ciclos), esta vez con `web/experiment.js` v2
+(logueo de decisión por decisión, no solo resultado final). Un tropiezo
+técnico en el camino: la primera reconstrucción de la imagen local usó un
+`web/Build/` desactualizado (de una sesión de pruebas anterior) y produjo un
+`RangeError: Maximum call stack size exceeded` real en el WASM — no
+relacionado con el cambio de JS. Se corrigió bajando el artefacto fresco del
+propio `build-webgl` del PR de la instrumentación y reconstruyendo la imagen
+desde ahí; la corrida completa sin errores después de eso. Dataset completo:
+`docs/experiments/fase6.3-mixed-field-18races-v2-instrumented.json`.
+
+**Resultado primario, aún más marcado que en la primera corrida**: posición
+media `heuristic` 2.00 ± 0.82, `llm` 5.00 ± 0.82 (escala 1-6).
+
+**La hipótesis se confirma con datos, filtrando a decisiones LLM realmente
+frescas (`status: "ok"`, n=284 de 682 — el resto son fallback, ver más
+abajo)**:
+
+| | `directive: attack` | `directive: defend` | `aggression: low` | `risk: low` |
+|---|---|---|---|---|
+| **heuristic** (n=1511, siempre fresca) | 52.6% | 41.9% | **0%** | **0%** |
+| **llm, solo `ok`** (n=284) | 10.9% | **76.4%** | **47.2%** | **43.7%** |
+
+La heurística fija **nunca** elige `agg:low` ni `risk:low` — por diseño de
+`HeuristicFallback.Decide`, siempre es `medium` o `high`. El LLM, cuando
+responde algo válido, elige `low` en casi la mitad de los casos, y prefiere
+`defend` (76%) sobre `attack` (11%) por un margen enorme. Esto es
+exactamente el sesgo conservador que se veía cualitativamente en el radio en
+vivo, ahora con número: **no es percepción, es el patrón dominante de sus
+respuestas válidas**.
+
+**Segundo hallazgo, no anticipado**: de las 682 decisiones que le tocaron a
+autos LLM, solo **284 (41.6%) fueron respuestas frescas del modelo** — las
+otras 398 (58.4%) fueron fallback. Y de esas 398, **391 (98%) fueron por
+`reason: "busy"`** — el semáforo de concurrencia (`STRATEGY_MAX_CONCURRENT`,
+default 1) rechazando la llamada porque otro auto ya estaba usando el único
+turno de Ollama — no por JSON inválido (`rejected`: solo 6, 0.9%) ni por
+timeout (1, 0.1%). Con 3 autos LLM corriendo a la vez y un solo cupo de
+concurrencia, la mayoría de los eventos de un auto LLM ni siquiera llegan a
+preguntarle al modelo: el auto sigue con la directiva que tenía, que si esa
+directiva ya era conservadora, se queda así mucho más tiempo del que el
+41.6% de "respuestas frescas" sugiere a primera vista. Es decir: el efecto
+observado en la posición final probablemente combina **dos causas**, no
+una — el sesgo del modelo cuando responde, y cuánto tiempo esa respuesta
+(fresca o vieja) queda vigente por la falta de cupo de concurrencia.
+
+**Esto abre un experimento de seguimiento barato y sin tocar el modelo**:
+correr el mismo campo mixto con `STRATEGY_MAX_CONCURRENT=3` (uno por auto
+LLM) y ver si el `okRate` sube y si eso por sí solo mueve la brecha, antes
+de tocar nada del prompt o del modelo. Esta maquina de pruebas tiene 8 cores
+— sobra margen para probarlo local aunque el pod de producción real solo dé
+para `MAX_CONCURRENT=1-2`.
+
+**No re-litigado**: la conversación sobre pasar a un modelo hosted más
+grande (GPT-5.8/6) quedó en pausa — se decidió confirmar la causa con datos
+antes de tocar SS2.5. Con esto confirmado, el siguiente paso más barato es
+ajuste de prompt + concurrencia con el mismo modelo local, no un cambio de
+arquitectura.
