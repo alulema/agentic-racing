@@ -22,14 +22,26 @@
  * the methodology: rotation is still the load-bearing control, seeds just
  * aren't the axis that provides it anymore.
  *
+ * v2 adds decision-level logging: every `radio:msg` (one per strategy event,
+ * §6.6) is recorded with its directive/aggression/risk/status, not just the
+ * final per-race result. The first run (18 races, see docs/Devlog.md
+ * 2026-09-13) found the `llm` group finishing ~2.8 positions worse than
+ * `heuristic`, consistently across all 6 pilots — this is here to test the
+ * standing hypothesis for *why*: that the model picks conservative
+ * (low aggression / low risk) directives more often than the fixed
+ * heuristic would in the same spot, which costs it pace directly via §6.5's
+ * braking-margin/corner-exit channels. Bumped the storage key so this run
+ * starts clean rather than trying to resume the older, undecorated dataset.
+ *
  * Flow: read progress from localStorage. If the target hasn't been reached,
- * record this race's per-car result on `race:end`, then reload the page with
- * the next `?race=` index after a short pause — the race auto-starts on load,
- * so this runs unattended. Once the target is reached, render a summary
- * on-page and offer the raw results as a JSON download instead of reloading.
+ * record every decision as it streams in and this race's per-car result on
+ * `race:end`, then reload the page with the next `?race=` index after a
+ * short pause — the race auto-starts on load, so this runs unattended. Once
+ * the target is reached, render a summary on-page and offer the raw
+ * results+decisions as a JSON download instead of reloading.
  */
 
-const STORAGE_KEY = "agentic-racing:experiment:v1";
+const STORAGE_KEY = "agentic-racing:experiment:v2";
 const RACES_PER_CYCLE = 6; // matches RaceDirective.Population size
 const RELOAD_DELAY_MS = 4000; // let the "Carrera terminada" banner sit for a beat
 
@@ -43,9 +55,10 @@ export function initExperiment(params) {
 
   let state = load();
   if (reset || !state || state.target !== target) {
-    state = { target, racesDone: 0, results: [] };
+    state = { target, racesDone: 0, results: [], decisions: [] };
     save(state);
   }
+  if (!state.decisions) state.decisions = []; // upgrading a run started before v2
 
   let currentCars = new Map(); // carId -> "llm" | "heuristic", from this race's race:start
 
@@ -59,6 +72,32 @@ export function initExperiment(params) {
   function onStart(m) {
     currentCars = new Map();
     (m.cars || []).forEach((c) => currentCars.set(c.id, c.pilot));
+  }
+
+  // Every strategy event (§6.6), not just the final result — this is what
+  // lets us see *what the model chose*, not just how the car did.
+  function onRadio(m) {
+    if (state.racesDone >= state.target) return;
+    state.decisions.push({
+      race: state.racesDone,
+      cycle: Math.floor(state.racesDone / RACES_PER_CYCLE),
+      raceIndex: loadedRaceIndex,
+      carId: m.carId,
+      name: m.name,
+      engine: m.engine === "heuristic" ? "heuristic" : "llm",
+      event: m.event || null,
+      lap: m.lap ?? null,
+      directive: m.directive || null,
+      aggression: m.aggression || null,
+      risk: m.risk || null,
+      status: m.status === "ok" ? "ok" : "fallback",
+      reason: m.reason || null,
+      latencyMs: m.latencyMs || 0,
+    });
+    // Not saved here — `decisions` rides along with the next onEnd() save, so
+    // a mid-race interruption loses that race's decisions same as it already
+    // loses that race's result. Saving on every radio:msg would mean a
+    // localStorage write every ~cooldown-per-car, which is unnecessary churn.
   }
 
   function onEnd(m) {
@@ -96,7 +135,7 @@ export function initExperiment(params) {
     }, RELOAD_DELAY_MS);
   }
 
-  return { onStart, onEnd };
+  return { onStart, onEnd, onRadio };
 }
 
 // --- persistence ------------------------------------------------------------
@@ -127,7 +166,7 @@ function ensureBanner() {
   bannerEl = document.createElement("div");
   bannerEl.id = "experiment-banner";
   bannerEl.style.cssText =
-    "position:fixed;top:0.5rem;left:0.5rem;z-index:9999;max-width:min(90vw,480px);" +
+    "position:fixed;top:0.5rem;left:0.5rem;z-index:9999;max-width:min(90vw,560px);" +
     "background:rgba(10,12,16,0.85);color:#e8e9ec;padding:0.5rem 0.75rem;" +
     "border-radius:8px;font:12px/1.5 ui-monospace,SFMono-Regular,monospace;" +
     "white-space:pre-wrap;pointer-events:none;";
@@ -136,31 +175,42 @@ function ensureBanner() {
 }
 
 function showBanner(state) {
-  ensureBanner().textContent = `Fase 6.3 experiment — race ${state.racesDone}/${state.target}`;
+  ensureBanner().textContent =
+    `Fase 6.3 experiment — race ${state.racesDone}/${state.target}  ` +
+    `(${state.decisions.length} decisions logged)`;
 }
 
 function finish(state) {
-  const summary = computeSummary(state.results);
+  const summary = computeSummary(state.results, state.decisions);
   const el = ensureBanner();
   el.style.pointerEvents = "auto";
-  const fmt = (g) =>
+  const fmtResult = (g) =>
     g
       ? `n=${g.races}  pos=${g.position.mean.toFixed(2)}±${g.position.sd.toFixed(2)}  ` +
         `gap=${g.gap.mean.toFixed(1)}s  overtakes=${g.overtakes}  incidents=${g.incidents}`
       : "n=0";
+  const fmtDist = (d) => (d ? Object.entries(d).map(([k, v]) => `${k}:${v}%`).join(" ") : "");
+  const fmtDecisions = (g) =>
+    g
+      ? `n=${g.decisions} ok=${g.okRate}%  directive[ ${fmtDist(g.directiveDist)} ]  ` +
+        `agg[ ${fmtDist(g.aggressionDist)} ]  risk[ ${fmtDist(g.riskDist)} ]`
+      : "";
   el.textContent =
     `Fase 6.3 experiment DONE — ${state.target} races\n` +
-    `llm:       ${fmt(summary.llm)}\n` +
-    `heuristic: ${fmt(summary.heuristic)}\n` +
-    `(mean ± population SD of finishing position; lower is better)`;
-  offerDownload(state);
+    `llm:       ${fmtResult(summary.llm)}\n` +
+    `heuristic: ${fmtResult(summary.heuristic)}\n` +
+    `(mean ± population SD of finishing position; lower is better)\n\n` +
+    `llm decisions:       ${fmtDecisions(summary.llm)}\n` +
+    `heuristic decisions: ${fmtDecisions(summary.heuristic)}`;
+  offerDownload(state, summary);
 }
 
 // --- summary stats (§6.3: primary = mean finishing position, report
 // dispersion, not just the mean; secondary = total time proxy, overtakes,
-// incidents) --------------------------------------------------------------
+// incidents, plus the decision-level directive/aggression/risk distribution
+// this v2 adds, to test the "the model plays it safe" hypothesis) ----------
 
-function computeSummary(results) {
+function computeSummary(results, decisions) {
   const groups = {};
   for (const r of results) (groups[r.engine] ||= []).push(r);
 
@@ -182,11 +232,36 @@ function computeSummary(results) {
       incidents: rows.reduce((a, r) => a + r.incidents, 0),
     };
   }
+
+  const decGroups = {};
+  for (const d of decisions || []) (decGroups[d.engine] ||= []).push(d);
+
+  const distribution = (rows, key) => {
+    const counts = {};
+    for (const r of rows) {
+      const v = r[key] || "(none)";
+      counts[v] = (counts[v] || 0) + 1;
+    }
+    const n = rows.length || 1;
+    const pct = {};
+    for (const [k, c] of Object.entries(counts)) pct[k] = +((100 * c) / n).toFixed(1);
+    return pct;
+  };
+
+  for (const [engine, rows] of Object.entries(decGroups)) {
+    out[engine] = out[engine] || {};
+    out[engine].decisions = rows.length;
+    out[engine].okRate = +((100 * rows.filter((r) => r.status === "ok").length) / (rows.length || 1)).toFixed(1);
+    out[engine].directiveDist = distribution(rows, "directive");
+    out[engine].aggressionDist = distribution(rows, "aggression");
+    out[engine].riskDist = distribution(rows, "risk");
+  }
   return out;
 }
 
-function offerDownload(state) {
-  const blob = new Blob([JSON.stringify(state.results, null, 2)], {
+function offerDownload(state, summary) {
+  const payload = { results: state.results, decisions: state.decisions, summary };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
     type: "application/json",
   });
   const url = URL.createObjectURL(blob);
