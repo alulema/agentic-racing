@@ -3024,3 +3024,40 @@ costo de rendimiento directo y medible. Pendiente: instrumentar una corrida
 futura para loguear la distribución real de `aggression`/`risk_tolerance`
 elegida y confirmar la hipótesis con datos, en vez de solo la observación
 cualitativa de esta corrida.
+
+### Fase 6.3: instrumentando la hipótesis del sesgo conservador (2026-09-13)
+
+El dueño del proyecto preguntó si pasar a un modelo hosted más grande
+(GPT-5.8/6) resolvería la brecha de rendimiento. Respuesta: no re-litigar
+§2.5 sin confirmar primero *por qué* pasa esto con datos, no solo con lo que
+se vio cualitativamente en el radio en vivo — "más razonamiento" y "menos
+conservador" no son el mismo eje, y un modelo hosted revierte varias
+decisiones cerradas (sin secretos, sin costo por token, sin dependencia de
+terceros) que sostienen el hand-off actual.
+
+Paso 1 acordado: instrumentar la distribución real de
+`directive`/`aggression`/`risk_tolerance` por motor, en vez de asumir el
+sesgo. `web/experiment.js` pasa a v2 (`agentic-racing:experiment:v2` —
+clave nueva, no intenta retomar el dataset viejo sin decisiones):
+
+- Nuevo `onRadio(m)`, conectado en `web/app.js` al mismo `radio:msg` que ya
+  alimenta el panel de radio y el decision-log de Fase 6.1 — registra
+  *cada* evento de estrategia (no solo el resultado final de la carrera) con
+  `directive`, `aggression`, `risk`, `status` (`ok`/`fallback`), `reason` y
+  `latencyMs`, por auto/carrera/ciclo.
+- `computeSummary` calcula, además de lo ya existente, la distribución
+  porcentual de `directive`/`aggression`/`risk` por motor y la tasa de
+  respuestas válidas (`okRate`).
+- El JSON exportado pasa de ser un arreglo plano a `{results, decisions,
+  summary}` — el resumen queda embebido para no tener que recomputarlo.
+
+Verificado con `?mock=1&experiment=1&cycles=1`: 12 decisiones logueadas para
+una carrera de 6 vueltas x 2 autos ejercitados por el mock (forma de los
+datos correcta: `carId`, `engine`, `directive`, `status`, `reason` todos
+presentes).
+
+Esto reabre PR #13 (mismo Fase 6.3, no uno nuevo — sigue siendo la misma
+pieza de trabajo) en vez de mergear el resultado de las 18 carreras sin la
+instrumentación y volver después. Falta: correr las 18 carreras de nuevo
+(el dataset anterior no tiene `decisions`) para confirmar o refutar la
+hipótesis con datos.

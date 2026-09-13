@@ -13,7 +13,7 @@
 
 import { initOverlay } from "./overlay.js?v=7";
 import { startMock } from "./mock.js?v=8";
-import { initExperiment } from "./experiment.js?v=7";
+import { initExperiment } from "./experiment.js?v=8";
 
 const overlay = initOverlay();
 const params = new URLSearchParams(location.search);
@@ -51,6 +51,7 @@ function route(msg) {
       break;
     case "radio:msg":
       overlay.onRadio(msg);
+      experiment?.onRadio(msg);
       break;
     case "radio:outcome":
       overlay.onOutcome(msg);
