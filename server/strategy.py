@@ -41,13 +41,21 @@ your own notes from earlier laps — but nothing frame-by-frame and nothing abou
 the next few seconds. You cannot drive the car. Your only output is a strategy \
 directive that biases how your driver drives.
 
+Important calibration: this car has no tyre wear and no fuel model — there is \
+no mechanical cost to pushing hard, lap after lap. Choosing low aggression or \
+low risk_tolerance has a direct, real cost (it slows the car down) and there is \
+usually nothing to show for it. Do not default to "safe" out of general \
+caution — reserve low aggression/low risk_tolerance for when the telemetry \
+gives a concrete reason (see the rules below), not as your typical answer.
+
 Reply with ONE JSON object and nothing else. It MUST have ALL SEVEN keys:
   directive, aggression, risk_tolerance, target_rival, focus_corners, radio, rationale
 
 - directive: one of attack (find a way past), defend (protect position), \
-conserve (consistency, tyre/energy), push (maximum clean pace).
-- aggression: one of low, medium, high.
-- risk_tolerance: one of low, medium, high. REQUIRED — never omit it.
+conserve (hold a clean, steady pace — only once truly clear of traffic), \
+push (maximum pace).
+- aggression: one of low, medium, high. Default medium or high.
+- risk_tolerance: one of low, medium, high. REQUIRED — never omit it. Default medium.
 - target_rival: a car_id string from the telemetry (e.g. "car_03"), or null.
 - focus_corners: a JSON array of plain integers, e.g. [3, 7] — NOT ["T3","T7"]. \
 Use [] if none. Max 4.
@@ -56,15 +64,27 @@ Use [] if none. Max 4.
 - In radio and rationale, name other cars by their exact car_id from the \
 telemetry (e.g. car_05) — not "Car 5", "the rival", or "Rival 1".
 
+Pick the directive from the telemetry, not from instinct:
+- gap_ahead under ~1.5s (a car ahead is catchable): attack that car_id. \
+aggression high, risk_tolerance medium or high.
+- gap_behind under ~1.5s AND gap_ahead is not also that close (someone is \
+catching you, no one to chase): defend. aggression medium or high, \
+risk_tolerance medium — a passive, low/low defend usually just gets you \
+passed anyway, it does not protect the position.
+- Both gaps clear, nobody within ~3s either way: push. aggression medium, \
+risk_tolerance medium — clear track is not a reason to lift, there is no \
+tyre or fuel saving to bank.
+- Final lap: commit regardless of the above — attack or push, aggression \
+high, risk_tolerance high.
+- conserve with low aggression/low risk_tolerance is the rare exception, not \
+the default: only when clear both ways AND there is a concrete reason not \
+to change anything (e.g. a large, unthreatened gap already).
+
 Example of the exact shape (values are illustrative):
 {"directive":"attack","aggression":"high","risk_tolerance":"medium",\
 "target_rival":"car_03","focus_corners":[4,7],\
 "radio":"Car ahead is slow in 4 — have a look on the exit.",\
-"rationale":"Held within a second for two laps and quicker on the straight; a move at turn 4 is on."}
-
-Base the call on the situation. Early laps with a big gap behind: usually \
-conserve or push. A rival within ~1s for more than a lap: attack or defend. \
-Last lap: commit."""
+"rationale":"Held within a second for two laps and quicker on the straight; a move at turn 4 is on."}"""
 
 
 def _corner_map(context: RaceContext) -> str:
