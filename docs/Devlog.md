@@ -2960,3 +2960,67 @@ siendo la misma limitación de siempre): layout idéntico al de landscape
 phone, sin overflow horizontal, y el modal de Fase 6.1 (Decision log / clic
 en una línea de radio) sigue funcionando igual encima del nuevo layout.
 Portrait de teléfono no se tocó — sigue como en PR #11.
+
+### Fase 6.3: experimento corrido — 18 carreras, hallazgo honesto (2026-09-13)
+
+Corrido localmente (imagen de producción, `docker run` + Chrome, sin tocar el
+pod efímero): 3 ciclos completos de `raceIndex=0..5` (`?experiment=1&cycles=3`),
+18 carreras reales, ~2h20 de reloj. Yo mismo lo corrí con automatización de
+browser — con un tropiezo en el camino: la primera vez la pestaña quedó sin
+foco de sistema operativo (`document.hidden=true`) y Chrome congeló el bucle
+de WebGL casi por completo (probé también reproducir audio silencioso para
+evitar el throttling; no funcionó). El dueño del proyecto reinició la máquina
+y, con la pestaña ya visible/enfocada de entrada, corrió a ritmo real
+(confirmado: 2 vueltas en ~197s, ~98s/vuelta, dentro de lo esperado) sin que
+hiciera falta tocarla — solo chequeos cada 7-8 min vía `javascript_exec` para
+verificar avance, sin interactuar con la página.
+
+**Dataset**: `docs/experiments/fase6.3-mixed-field-18races.json` — 108 filas
+(18 carreras x 6 autos): `race, cycle, raceIndex, carId, name, engine
+(llm|heuristic), position, gap, overtakes, incidents`.
+
+**Resultado — nada de "no hay efecto detectable"; hay un efecto grande y
+consistente, y va al revés de lo que uno esperaría:**
+
+| grupo | n | posición (media ± DE) | gap medio | adelantamientos (total) | incidentes (total) |
+|---|---|---|---|---|---|
+| `llm` | 54 | **4.91 ± 1.02** | 43.9 s | 1371 | 883 |
+| `heuristic` | 54 | **2.09 ± 0.91** | 3.1 s | 3481 | 2323 |
+
+Los autos con **heurística fija terminan ~2.8 posiciones mejor, en promedio,
+que los autos con jefe de equipo LLM** — y esto no es un promedio que
+esconda casos mixtos: se repite para **cada uno de los 6 pilotos, sin
+excepción** (delta por piloto entre -2.33 y -3.56 posiciones). La dispersión
+(DE ~1) es chica frente al tamaño del efecto (~2.8 posiciones) — no es ruido
+que la varianza se coma.
+
+**Hipótesis (no confirmada en este corrida — el harness no logueó la
+distribución de directivas por carrera, solo el resultado): el modelo
+(`llama3.2:3b`) sesga sistemáticamente hacia directivas conservadoras**
+(`defend`/`conserve` con `agg:low risk:low`) más seguido de lo que la
+heurística fija lo haría — vi esto cualitativamente en el radio en vivo
+durante el monitoreo. Como `aggression`/`risk_tolerance` modulan directo el
+margen de frenada y la agresividad de salida de curva (§6.5), un sesgo
+sistemático hacia "bajo" le cuesta ritmo al auto de forma directa. Esto
+encajaría con que el grupo LLM también tenga gaps enormes (43.9s vs 3.1s) —
+autos mucho más cautos se caen del pelotón en vez de pelear posición.
+
+**Nota metodológica sobre las métricas secundarias**: `overtakes` cuenta cada
+cambio de orden de posición detectado en `FixedUpdate` (~50 Hz) — con autos
+muy parejos en ritmo (el caso del grupo heurístico, gap medio 3.1s) esto
+sobre-cuenta vaivenes de una posición que no son un "adelantamiento" real y
+sostenido en el sentido común del término. Los totales (1371 vs 3481) hay
+que leerlos como "cuánta pelea de posición hubo" más que como conteo limpio
+de pases. La métrica primaria (posición de llegada) no tiene este problema y
+es la que sostiene el hallazgo.
+
+**Esto es exactamente el tipo de hallazgo honesto que la Fase 7 pide
+reportar tal cual, no forzar hacia una narrativa positiva** — no es "el LLM
+no mejora la carrera" (lo cual ya sería honesto de decir), es "el LLM, con
+este modelo y este prompt, la empeora de forma medible", y es un dato real
+para el post técnico: un modelo 3B razonando estrategia en tiempo real puede
+ser sistemáticamente más conservador que una regla simple, y eso tiene un
+costo de rendimiento directo y medible. Pendiente: instrumentar una corrida
+futura para loguear la distribución real de `aggression`/`risk_tolerance`
+elegida y confirmar la hipótesis con datos, en vez de solo la observación
+cualitativa de esta corrida.

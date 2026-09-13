@@ -505,7 +505,7 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   resuelven como acierto o fallo por igual — `radio:outcome` en el mismo feed de radio,
   mismo estilo visual, solo un tag "result" distinto.
 
-- [~] **6.3 — Comparación medible: campo mixto (prioridad media, esfuerzo medio)**
+- [x] **6.3 — Comparación medible: campo mixto (prioridad media, esfuerzo medio)**
 
   **Cómo NO hacerlo** (era el diseño original de este documento y estaba mal): correr la
   misma seed dos veces, una con todos los autos usando LLM y otra con ninguno, y comparar
@@ -551,9 +551,16 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   fuente de variación real que queda es la estocasticidad del LLM (temperature 0.4 +
   latencia real), no el trazado.
 
-  **Falta correr el experimento de verdad** (18 carreras = 3 ciclos, ~1.5-2h de reloj
-  real, local — nunca contra el pod efímero de producción, que se cae a los ~60 min) y
-  volcar el resultado a la Fase 7. Instrucciones en `docs/Devlog.md`.
+  **[x] Corrido (2026-09-13)**: 18 carreras reales (3 ciclos), local. Dataset en
+  `docs/experiments/fase6.3-mixed-field-18races.json`. Resultado — no "sin efecto
+  detectable", sino un efecto **grande, consistente y contrario a lo esperado**: el
+  grupo `heuristic` termina en promedio **2.09 ± 0.91**, el grupo `llm` **4.91 ± 1.02**
+  (escala 1-6) — ~2.8 posiciones de diferencia, repetida sin excepción en los 6 pilotos
+  individualmente. Hipótesis no confirmada: el modelo sesga hacia directivas
+  conservadoras (`agg:low risk:low`) más que la heurística fija, lo que le cuesta ritmo
+  directo (§6.5). Detalle completo, tabla y nota metodológica sobre las métricas
+  secundarias en `docs/Devlog.md`. Este es el dato duro para la Fase 7 — un hallazgo
+  honesto, no forzado hacia una narrativa positiva.
 
 - [ ] **6.4 — Presupuesto de decisiones limitado (prioridad baja, esfuerzo medio-alto)**
   El jefe de equipo recibe un número fijo de "cambios de estrategia" disponibles por
