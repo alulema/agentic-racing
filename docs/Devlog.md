@@ -3121,3 +3121,61 @@ grande (GPT-5.8/6) quedó en pausa — se decidió confirmar la causa con datos
 antes de tocar SS2.5. Con esto confirmado, el siguiente paso más barato es
 ajuste de prompt + concurrencia con el mismo modelo local, no un cambio de
 arquitectura.
+
+### Fase 6.3, paso siguiente: ajuste de prompt (2026-09-13)
+
+Con el sesgo conservador confirmado con datos duros (ver entrada anterior),
+primer intento de corregirlo sin tocar el modelo ni la infraestructura:
+ajuste de `_SYSTEM_RULES` en `server/strategy.py`.
+
+**Hallazgo concreto al revisar el prompt**: la definición original de
+`conserve` decía literalmente `"conserve (consistency, tyre/energy)"` — le
+está dando al modelo una excusa de manual de F1 real para ir despacio que
+**no existe en esta simulación** (no hay desgaste de neumáticos ni modelo de
+combustible). Esto probablemente explicaba buena parte del sesgo: el modelo
+no está "siendo cauto porque sí", está aplicando una regla de dominio que el
+propio prompt le sugirió y que es ficticia acá. Segundo problema: la regla
+"a rival within ~1s: attack or defend" no distinguía la *dirección* del gap
+(adelante vs. atrás), dejando la elección más al instinto del modelo que a
+la telemetría.
+
+Cambios:
+- Nota de calibración explícita al inicio: sin desgaste ni combustible, "low"
+  en aggression/risk_tolerance tiene costo directo (auto más lento) y
+  normalmente ningún beneficio a cambio — no debe ser la respuesta por
+  default.
+- `conserve` redefinido sin la excusa de neumáticos/combustible: "hold a
+  clean, steady pace — only once truly clear of traffic".
+- Reglas explícitas atadas a los campos reales de telemetría en vez de
+  ambiguas: `gap_ahead` < 1.5s → attack (agg high, risk medium/high);
+  `gap_behind` < 1.5s y `gap_ahead` no tan cerca → defend (agg medium/high,
+  risk medium — un defend pasivo en low/low "igual te pasan"); ambos gaps
+  despejados (>3s) → push (agg/risk medium, "no hay ahorro de neumáticos que
+  guardar"); última vuelta → commit (agg/risk high). `conserve` con low/low
+  queda como excepción explícita, no default.
+
+**Verificado contra el modelo real** (`llama3.2:3b` local, 4 escenarios
+manuales, no una corrida completa todavía):
+- Pista despejada → `push, agg:high, risk:medium` (antes hubiera sido
+  candidato a `conserve, low/low`).
+- Auto adelante a 0.9s → `attack, agg:high, risk:medium`, target correcto.
+- Rival detrás a 0.8s → `defend, agg:medium, risk:high` (no low/low),
+  razonamiento correcto citando el gap exacto.
+- Ventaja de 22s sin amenaza real → el modelo igual eligió `defend`
+  (`agg:medium, risk:high`) diciendo "still within striking distance" sobre
+  un gap de 22s — **error de juicio numérico real**, la regla explícita de
+  "<1.5s" no se sigue siempre al pie de la letra. Límite conocido de un
+  modelo de 3B con razonamiento numérico preciso, no algo que un prompt más
+  largo resuelva del todo. Lo honesto es reportarlo así, no venderlo como
+  resuelto al 100%: la señal que sí se sostuvo en los 4 casos es que los
+  *niveles* (aggression/risk) dejaron de caer en low/low — la elección de
+  *directiva* en casos de magnitud extrema sigue siendo imperfecta.
+
+server/tests: 17/17 sin regresión (ningún test verifica el contenido literal
+de `_SYSTEM_RULES`, solo que el prefijo es estable byte-a-byte entre
+llamadas — eso se preserva).
+
+**Pendiente**: correr las 18 carreras de nuevo con este prompt para
+cuantificar el cambio real en la distribución de `directive`/`aggression`/
+`risk` y en la posición final — las 4 pruebas manuales son solo humo, no
+confirmación.
