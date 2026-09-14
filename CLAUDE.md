@@ -570,6 +570,26 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   `STRATEGY_MAX_CONCURRENT=3` antes de tocar el modelo) en `docs/Devlog.md`. Dato duro
   para la Fase 7 — hallazgo honesto, no forzado hacia una narrativa positiva.
 
+  **[x] Tercera corrida, validando el ajuste de prompt (2026-09-14)**: mismas 18
+  carreras (3 ciclos), contra la imagen con el fix de `_SYSTEM_RULES` (PR #16)
+  (`docs/experiments/fase6.3-mixed-field-18races-v3-prompt-fix.json`). **El sesgo
+  conservador casi desaparece al nivel de decisión**: filtrando a respuestas frescas
+  (`status:"ok"`), `agg:low`/`risk:low` cae de ~45% a **0.3%**, `attack` sube de 10.9%
+  a 23.9%, `conserve` cae de 7.0% a 0.3% — el prompt corrigió exactamente lo que se
+  propuso corregir. El **gap de tiempo** (`llm` vs `heuristic`) se achica fuerte:
+  19.3 ± 10.0 s contra el ganador, contra 47.9 ± 17.9 s en la corrida anterior (~60%
+  menos). Pero la **posición media casi no se mueve** (`heuristic` 2.26 ± 1.17,
+  `llm` 4.74 ± 1.17, gap de 2.48 posiciones contra 3.00 antes) porque el `okRate` no
+  mejoró — de hecho bajó a 36.0% (peor que el 41.6% previo) — y el 98.7% del resto
+  sigue en fallback por `reason:"busy"`. Conclusión honesta: el prompt sí arregla el
+  razonamiento del modelo cuando se le pregunta, pero con solo ~1 de cada 3 llamadas
+  de auto LLM recibiendo una respuesta fresca, la mayoría del tiempo esos autos
+  corren con la heurística de respaldo de todos modos — la concurrencia, no el
+  prompt, es ahora el techo. Confirma que el siguiente paso barato pendiente
+  (`STRATEGY_MAX_CONCURRENT=3`, con `docker run --cpus=N` para simular el pod real)
+  es el que puede mover la aguja, no más ajuste de prompt. Detalle y tablas en
+  `docs/Devlog.md`.
+
 - [ ] **6.4 — Presupuesto de decisiones limitado (prioridad baja, esfuerzo medio-alto)**
   El jefe de equipo recibe un número fijo de "cambios de estrategia" disponibles por
   carrera (ej. 3 por auto) en vez de poder emitir directivas sin costo. Obliga al LLM a
