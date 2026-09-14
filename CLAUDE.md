@@ -642,8 +642,40 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   `rag-blogposts`, corre 3 imágenes en un pod), así que esto no rompe el
   contrato — solo falta que la infra real le asigne CPU/RAM extra al pod si
   se decide provisionarlo, que es tarea del mantenedor de esa infra, no de
-  este repo. Falta correr una quinta ronda de 18 carreras con el sidecar
-  activo para medir el efecto real; detalle en `docs/Devlog.md`.
+  este repo.
+
+  **[x] Quinta corrida, sidecar activo, local (2026-09-14)**: 18 carreras
+  más, sidecar real (`ghcr.io/alulema/agentic-racing-ollama`) en un container
+  aparte, misma red Docker, `OLLAMA_URLS` con ambos endpoints
+  (`docs/experiments/fase6.3-mixed-field-18races-v5-sidecar-local.json`).
+  **El sidecar no cambió nada**, prácticamente cifra por cifra frente a la
+  corrida anterior sin sidecar (`okRate` 9.3% vs 9.5%, posición y gap dentro
+  del ruido). Causa identificada, no un bug: esta máquina de desarrollo tiene
+  **8 cores físicos**; los dos containers Ollama (`--cpus=4`+`--cpus=2`)
+  comparten ese mismo total fijo con Chrome renderizando el build WebGL —
+  un segundo motor *local* no suma cómputo real, suma demanda sobre el mismo
+  cómputo que ya había, el mismo problema de fondo que la corrida anterior
+  (`STRATEGY_MAX_CONCURRENT=3`), solo que repartido entre dos procesos en vez
+  de encolado en uno. Confirma exactamente la advertencia que el usuario hizo
+  al proponer la idea ("no partir el mismo pastel, asignar más recursos") y
+  que ya estaba en `docs/handoff.md` ("on top of, not carved out of"): esta
+  laptop no puede darle al sidecar ese "on top of". **El mecanismo del pool
+  sí quedó validado por separado** (prueba aislada de 3 llamadas contra 2
+  engines: exactamente 2 consiguieron slot, nunca ambas al mismo endpoint) —
+  lo que no se pudo validar en esta máquina es la ganancia de capacidad real,
+  porque eso requiere CPU genuinamente adicional, no dos containers
+  compitiendo por el mismo procesador. Queda documentado como trabajo futuro
+  para quien aprovisione el pod de producción real, no como pendiente de
+  esta fase. Detalle completo en `docs/Devlog.md`.
+
+  Con esto se da por **cerrada la serie de experimentos de Fase 6.3** (5
+  corridas de 18 carreras): sesgo conservador confirmado y corregido, gap de
+  tiempo reducido ~60%, el cuello de botella remanente identificado como
+  cómputo real disponible para Ollama (no el prompt, no el semáforo del
+  proxy), y la palanca correcta (más motores reales) implementada y con su
+  mecanismo validado, aunque su beneficio de capacidad no se pudo confirmar
+  en una máquina de desarrollo de un solo host. Datos suficientes y honestos
+  para el post técnico de Fase 7.
 
 - [ ] **6.4 — Presupuesto de decisiones limitado (prioridad baja, esfuerzo medio-alto)**
   El jefe de equipo recibe un número fijo de "cambios de estrategia" disponibles por
