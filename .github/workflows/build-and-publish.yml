@@ -9,6 +9,7 @@ on:
 
 env:
   IMAGE: ghcr.io/alulema/agentic-racing
+  OLLAMA_SIDECAR_IMAGE: ghcr.io/alulema/agentic-racing-ollama
 
 # Least privilege by default; jobs opt into more.
 permissions:
@@ -156,3 +157,38 @@ jobs:
       # vez que se publica. Hay que ir a Package Settings en GitHub y
       # cambiar la visibilidad a Public — la infra efímera lo jala sin
       # credenciales (contrato DEMO_INTEGRATION.md, punto 7).
+
+  # Optional second-Ollama sidecar (Fase 6.3, docs/Devlog.md 2026-09-14) — a
+  # real second inference engine, not a bigger STRATEGY_MAX_CONCURRENT against
+  # one Ollama (that was tried and made things worse). Independent of
+  # build-webgl/test-editmode: the ollama-sidecar Dockerfile stage needs no
+  # Unity output at all, so this job doesn't wait on either of them and
+  # publishes on its own schedule. Same push:false-on-PR pattern as the app
+  # image — proves the stage still builds without publishing it.
+  build-and-push-ollama-sidecar:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: ollama-sidecar
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.OLLAMA_SIDECAR_IMAGE }}:latest
+            ${{ env.OLLAMA_SIDECAR_IMAGE }}:${{ github.sha }}
+
+      # NOTE (humano, una sola vez, igual que el paquete de la app): el primer
+      # push nace privado — cambiar a Public en Package Settings.

@@ -4,10 +4,13 @@
 # A tiny entrypoint supervises both. The llama3.2:3b weights are baked in at
 # build time so container startup needs no network and is deterministic.
 #
-# Two stages so the CUDA/ROCm/Vulkan runtimes the Ollama installer ships
+# Multi-stage so the CUDA/ROCm/Vulkan runtimes the Ollama installer ships
 # (~2 GB, useless on a CPU-only pod) never reach the final image. Fase 0
-# measured a single-stage build at ~8.3 GB; this lands around ~2.4 GB
-# (base + python deps + ollama CPU libs + the ~1.9 GB model + the web build).
+# measured a single-stage build at ~8.3 GB; the app image (stage 3, the
+# default build target) lands around ~2.4 GB (base + python deps + ollama
+# CPU libs + the ~1.9 GB model + the web build). Stage 2 is an optional
+# ollama-only sidecar image, built separately with `--target ollama-sidecar`
+# (Fase 6.3, see below) — same baked model, no Unity/Python app on top.
 #
 # No Unity/.NET runtime inside: Unity is a build-time dependency only (CI
 # produces the static Web output; this image just serves it).
@@ -39,7 +42,48 @@ RUN rm -rf /usr/local/lib/ollama/cuda_v* \
            /usr/local/lib/ollama/vulkan \
     && du -sh /usr/local/lib/ollama /root/.ollama
 
-# ---- stage 2: the runtime image -------------------------------------------
+# ---- stage 2: ollama-only sidecar (optional extra capacity, Fase 6.3) ------
+# A second, independent Ollama engine — same baked model, reused from stage 1
+# so it costs no extra build time. Declared as a "recurso extra" in the
+# hand-off manifest (docs/handoff.md), same pattern DEMO_INTEGRATION.md shows
+# for a Postgres+pgvector sidecar. Not required to run the demo: the app
+# defaults to its own loopback Ollama alone (OLLAMA_URLS unset) and works
+# exactly as before. When this sidecar IS provisioned alongside the app
+# container on the same internal network, the proxy load-balances strategy
+# calls across both (see server/guardrails.py) — the fix for the finding in
+# docs/Devlog.md 2026-09-14: raising the proxy's admission gate alone
+# (STRATEGY_MAX_CONCURRENT=3) just queues more calls behind ONE
+# single-threaded Ollama and makes things worse. Two real engines is the
+# only way to get real additional throughput without touching the model.
+#
+# Built via `docker build --target ollama-sidecar` (CI does this in its own
+# job, independent of the Unity build this stage doesn't need). NOT the
+# default target — a plain `docker build .` still produces the app image
+# (the last stage below), so nothing about the single-container path changes.
+FROM debian:bookworm-slim AS ollama-sidecar
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ollama-build /usr/local/bin/ollama /usr/local/bin/ollama
+COPY --from=ollama-build /usr/local/lib/ollama /usr/local/lib/ollama
+COPY --from=ollama-build /root/.ollama /root/.ollama
+
+# Unlike the app container's baked-in Ollama (loopback-only, §2.5), this one
+# IS the container's whole job, so it listens on all interfaces — the app
+# container reaches it by service/hostname over the pod's internal network,
+# never exposed past that (same "ingress interno" boundary as the app image,
+# just one hop further in).
+ENV OLLAMA_HOST=0.0.0.0:11434 \
+    OLLAMA_KEEP_ALIVE=24h \
+    OLLAMA_NUM_PARALLEL=1 \
+    OLLAMA_MAX_LOADED_MODELS=1 \
+    OLLAMA_NUM_THREAD=3
+EXPOSE 11434
+CMD ["ollama", "serve"]
+
+# ---- stage 3: the runtime image -------------------------------------------
 FROM python:3.13-slim
 
 # curl + ca-certificates only: the entrypoint's readiness probe uses curl.

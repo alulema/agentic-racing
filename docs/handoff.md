@@ -12,7 +12,7 @@ private infra repo; this project does not touch Azure or OIDC.
 | Image + port | `ghcr.io/alulema/agentic-racing:latest` · `8080` |
 | `shareable` | `true` — the server is stateless (§2.2): no race history, no per-user session. Race logs live in the client. One environment can serve many requests. |
 | Secrets to inject | **none.** The LLM is local (§2.5); there is no `ANTHROPIC_API_KEY` or equivalent. |
-| Extra resources | **none external.** A single image runs two processes: `uvicorn` (FastAPI, the only reachable port, `8080`) and an **Ollama sidecar** (`llama3.2:3b`, weights baked in, listening on `127.0.0.1:11434` only). `docker/entrypoint.sh` starts Ollama, waits for readiness, warms the model, then `exec`s uvicorn as PID 1. |
+| Extra resources | **Required: none.** A single image runs two processes: `uvicorn` (FastAPI, the only reachable port, `8080`) and an **Ollama sidecar** (`llama3.2:3b`, weights baked in, listening on `127.0.0.1:11434` only). `docker/entrypoint.sh` starts Ollama, waits for readiness, warms the model, then `exec`s uvicorn as PID 1. **Optional**: a *second* Ollama-only container as a genuine capacity add — see "Optional Ollama sidecar" below. Only worth provisioning if this demo's pod gets extra CPU/RAM allotted for it; skip it otherwise and the app runs exactly as the row above describes. |
 
 ## Env vars
 
@@ -29,6 +29,9 @@ private infra repo; this project does not touch Azure or OIDC.
     reloads.
   - `STRATEGY_*` (timeout, circuit-breaker p95 / cooldown, max-concurrent,
     rate-limit) have sane defaults in `server/main.py`; documented there.
+  - `OLLAMA_URLS` — comma-separated Ollama endpoints (default: the app's own
+    loopback Ollama alone). Only set this if the optional sidecar below is
+    provisioned; unset, nothing about the app's behavior changes.
 
 ## Pod sizing (target)
 
@@ -38,6 +41,47 @@ confirm it landed, otherwise the app still runs on 2 vCPU / 4 GiB with
 Ollama gets the bulk, the FastAPI proxy is light (static file serving + one
 proxied POST at a time). No GPU; the CUDA/ROCm/Vulkan runtimes are stripped from
 the image (final image ~4.5 GB, of which ~2 GB is the baked model).
+
+## Optional Ollama sidecar (extra strategy-call capacity)
+
+**Not required to run the demo** — everything above already describes a
+complete, working deployment. This is a capacity upgrade to consider only if
+this demo's pod can be given a genuinely bigger CPU/RAM budget than the
+target above, split across two containers instead of one.
+
+**Why**: Fase 6.3 (`docs/Devlog.md` 2026-09-14) measured that with 6 cars and
+3 of them LLM-piloted, one Ollama engine (`OLLAMA_NUM_PARALLEL=1`, by design —
+§7) serves strategy calls one at a time; raising the proxy's own admission
+gate (`STRATEGY_MAX_CONCURRENT`) without a second real engine just queues more
+calls behind that one engine and trips the latency circuit breaker *more*
+often, not less (fresh-reply rate measured at 36% → 9.5%). A second,
+independent Ollama gives real additional throughput instead.
+
+**What it is**: `ghcr.io/alulema/agentic-racing-ollama:latest` — a slightly
+lighter image than the app's (`docker/Dockerfile`'s `ollama-sidecar` build
+target: ~2.2 GB, just the Ollama binary + the same baked `llama3.2:3b`
+weights, no Unity/Python app on top, vs. the app image's ~2.4 GB). Listens on
+`11434`, **internal-only** — reachable from the app container
+by service/hostname on the pod's private network, never exposed past that
+(same ingress boundary the app's own port `8080` already has).
+
+**What it needs from the infra**: a second container in the *same* ephemeral
+pod/network as the app container (co-located, same lifecycle — torn down
+together, per the contract's lifecycle rules), reachable from the app
+container at a stable internal hostname (e.g. `ollama-2`), with its own CPU/RAM
+share **on top of** — not carved out of — the app container's existing budget.
+Sizing this container the same as the app container's own baked Ollama process
+(`OLLAMA_NUM_THREAD` = its share of vCPU − 0, since it runs nothing else) is a
+reasonable starting point.
+
+**How to wire it**: set `OLLAMA_URLS` on the app container to
+`http://127.0.0.1:11434,http://<sidecar-hostname>:11434` (see "Env vars"
+above). That's the only change the app needs — `server/guardrails.py` gives
+each URL its own concurrency slot automatically.
+
+**If this isn't provisioned**: nothing to do. The app defaults to its own
+loopback Ollama alone and behaves exactly as the rest of this document
+describes.
 
 ## Lifecycle it tolerates (per contract)
 

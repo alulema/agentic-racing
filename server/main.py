@@ -21,6 +21,7 @@ prefix.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import mimetypes
 import os
@@ -77,7 +78,21 @@ EXTRA_CONTENT_TYPES = {
 
 # --- strategist config ----------------------------------------------------
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+# One or more Ollama endpoints (Fase 6.3, docs/Devlog.md 2026-09-14):
+# ``OLLAMA_URLS`` is a comma-separated list — the app's own loopback Ollama by
+# default, plus an optional sidecar (docker/Dockerfile's ``ollama-sidecar``
+# stage, see docs/handoff.md) reachable by internal service hostname when
+# provisioned. ``OLLAMA_URL`` (singular) still works as a one-endpoint shortcut
+# for backward compatibility. Each endpoint gets its own concurrency slot
+# (guardrails.py) — this is deliberately NOT "raise the concurrency number
+# against one Ollama": that was tried and made freshness worse, not better.
+OLLAMA_URLS = [
+    u.strip()
+    for u in os.environ.get(
+        "OLLAMA_URLS", os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
+    ).split(",")
+    if u.strip()
+] or ["http://127.0.0.1:11434"]
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 # Keep the model resident for the whole session so no call pays a reload and
 # the KV-cache of each car's prefix survives between events (§6.7, §7.4). "24h"
@@ -88,8 +103,14 @@ OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "24h")
 # Timeout (§6.8): on expiry the client keeps its current directive. Sized for a
 # CPU-only 3B — a schema-free JSON generation still runs ~20-30 s on a small box.
 STRATEGY_TIMEOUT_S = float(os.environ.get("STRATEGY_TIMEOUT_S", "45"))
-# §7.5: at most this many calls reach Ollama at once (1-2 on a CPU-only pod).
-MAX_CONCURRENT = int(os.environ.get("STRATEGY_MAX_CONCURRENT", "1"))
+# §7.5: concurrency slots. None (unset) means "one per OLLAMA_URLS endpoint" —
+# the right default now that each endpoint is a real, independent engine.
+# Set explicitly only to round-robin fewer/more slots across those same
+# endpoints (mainly for tests); with a single real endpoint, setting this
+# above 1 reproduces the regression measured 2026-09-14 (docs/Devlog.md) —
+# don't do that in production.
+_max_concurrent_env = os.environ.get("STRATEGY_MAX_CONCURRENT")
+MAX_CONCURRENT = int(_max_concurrent_env) if _max_concurrent_env else None
 # Fase 6.1 re-explain (§ below): a manual, out-of-band ask — never blocks a
 # race event — so it can afford a shorter timeout than the directive call.
 EXPLAIN_TIMEOUT_S = float(os.environ.get("STRATEGY_EXPLAIN_TIMEOUT_S", "30"))
@@ -108,6 +129,7 @@ async def lifespan(app: FastAPI):
     )
     app.state.http = httpx.AsyncClient()
     app.state.guard = GuardrailState(
+        ollama_urls=OLLAMA_URLS,
         max_concurrent=MAX_CONCURRENT,
         breaker_p95_ms=BREAKER_P95_MS,
         breaker_cooldown_s=BREAKER_COOLDOWN_S,
@@ -170,7 +192,7 @@ async def strategy(req: StrategyRequest, request: Request) -> JSONResponse:
         try:
             content, latency_ms = await call_ollama(
                 request.app.state.http,
-                base_url=OLLAMA_URL,
+                base_url=slot.url,
                 model=OLLAMA_MODEL,
                 keep_alive=OLLAMA_KEEP_ALIVE,
                 messages=messages,
@@ -255,7 +277,7 @@ async def explain(req: ExplainRequest, request: Request) -> JSONResponse:
         try:
             content, latency_ms = await call_ollama(
                 request.app.state.http,
-                base_url=OLLAMA_URL,
+                base_url=slot.url,
                 model=OLLAMA_MODEL,
                 keep_alive=OLLAMA_KEEP_ALIVE,
                 messages=messages,
@@ -285,19 +307,26 @@ async def explain(req: ExplainRequest, request: Request) -> JSONResponse:
 
 
 async def _ollama_reachable(request: Request) -> bool:
-    """Cheap cached liveness probe of the sidecar (re-checked every ~5 s)."""
+    """Cheap cached liveness probe of the Ollama endpoint(s) (re-checked every
+    ~5 s). True if at least one of ``OLLAMA_URLS`` answers — with a sidecar
+    configured, losing one engine still leaves the demo able to serve fresh
+    directives through the other, so "reachable" tracks total capacity, not
+    every individual endpoint."""
 
     checked_at, ok = request.app.state.ollama_probe
     now = time.monotonic()
     if now - checked_at < 5.0:
         return ok
-    try:
-        resp = await request.app.state.http.get(
-            f"{OLLAMA_URL}/api/version", timeout=2.0
-        )
-        ok = resp.status_code == 200
-    except httpx.HTTPError:
-        ok = False
+
+    async def _probe(url: str) -> bool:
+        try:
+            resp = await request.app.state.http.get(f"{url}/api/version", timeout=2.0)
+            return resp.status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    results = await asyncio.gather(*(_probe(u) for u in OLLAMA_URLS))
+    ok = any(results)
     request.app.state.ollama_probe = (now, ok)
     return ok
 

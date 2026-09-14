@@ -1,0 +1,42 @@
+# Additive override: a second, independent Ollama engine for local testing of
+# the endpoint pool (server/guardrails.py, Fase 6.3, docs/Devlog.md
+# 2026-09-14). Layer it on top of the base file — it never stands alone:
+#
+#   docker compose -f compose.yaml -f compose.sidecar.yaml up --build
+#
+# Mirrors compose.yaml's own ollama/ollama-init pair under a "-2" suffix, own
+# named volume (a second `ollama pull` into a shared volume the first Ollama
+# already has open is asking for a lock/corruption problem — cheap to just
+# pull twice locally; production instead reuses ONE baked stage across both
+# images, see docker/Dockerfile's ollama-sidecar stage). Sets OLLAMA_URLS on
+# the app service instead of the base file's single OLLAMA_URL — main.py
+# checks OLLAMA_URLS first, so this cleanly overrides it.
+
+services:
+  ollama-2:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-2-models:/root/.ollama
+    expose:
+      - "11434"
+
+  ollama-2-init:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama-2
+    environment:
+      OLLAMA_HOST: "ollama-2:11434"
+    entrypoint: ["sh", "-c", "until ollama ps >/dev/null 2>&1; do sleep 1; done; ollama pull llama3.2:3b"]
+    restart: "no"
+    volumes:
+      - ollama-2-models:/root/.ollama
+
+  app:
+    environment:
+      OLLAMA_URLS: "http://ollama:11434,http://ollama-2:11434"
+    depends_on:
+      - ollama
+      - ollama-2
+
+volumes:
+  ollama-2-models:

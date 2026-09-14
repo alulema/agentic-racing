@@ -620,6 +620,31 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   más contención de CPU por llamada) o subir `STRATEGY_BREAKER_P95_MS` para tolerar
   la cola — no el semáforo solo. Detalle y tablas en `docs/Devlog.md`.
 
+  **[x] Sidecar de Ollama opcional (2026-09-14)**: la palanca correcta resultó
+  ser un segundo motor Ollama real, no un número más grande en el semáforo
+  del proxy. Implementado como **capacidad opcional, no requisito**: nuevo
+  stage `ollama-sidecar` en `docker/Dockerfile` (imagen ~2.2 GB, solo Ollama +
+  el modelo horneado, sin la app), `server/guardrails.py` reemplaza el
+  semáforo por un pool de endpoints (`OLLAMA_URLS`) donde cada slot queda
+  atado a una URL específica — dos llamadas concurrentes nunca comparten
+  Ollama. El modo de un solo container (`docker run` sin `OLLAMA_URLS`) sigue
+  siendo el default sin cambios de comportamiento. Validado localmente con
+  `compose.sidecar.yaml`: 3 llamadas concurrentes contra 2 engines →
+  exactamente 2 consiguieron slot (una por endpoint, confirmado en los logs
+  de cada Ollama), la 3ª cayó en `busy`; con los engines calientes, 2
+  llamadas concurrentes completaron en paralelo real (~9-10s cada una, no en
+  serie). 22/22 tests (17 previos + 5 nuevos de `test_guardrails.py`, que
+  reproducen la propiedad "nunca dos slots comparten URL" como test unitario
+  en vez de solo como hallazgo de un experimento de 2h). Documentado como
+  "recurso extra" opcional en `docs/handoff.md`, corrigiendo una objeción mía
+  anterior sin fundamento suficiente: `DEMO_INTEGRATION.md` sí soporta
+  sidecars declarados en el hand-off (el propio demo de referencia,
+  `rag-blogposts`, corre 3 imágenes en un pod), así que esto no rompe el
+  contrato — solo falta que la infra real le asigne CPU/RAM extra al pod si
+  se decide provisionarlo, que es tarea del mantenedor de esa infra, no de
+  este repo. Falta correr una quinta ronda de 18 carreras con el sidecar
+  activo para medir el efecto real; detalle en `docs/Devlog.md`.
+
 - [ ] **6.4 — Presupuesto de decisiones limitado (prioridad baja, esfuerzo medio-alto)**
   El jefe de equipo recibe un número fijo de "cambios de estrategia" disponibles por
   carrera (ej. 3 por auto) en vez de poder emitir directivas sin costo. Obliga al LLM a

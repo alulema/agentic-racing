@@ -136,6 +136,35 @@ model lives in a Docker volume instead of an image layer):
 docker compose up --build
 ```
 
+### Optional: a second Ollama for more strategy-call capacity
+
+The single `docker run` above is a complete, working deployment on its own —
+this is an optional capacity add, not a requirement. With 6 cars and 3 of them
+LLM-piloted, one Ollama engine serves strategy calls one at a time by design
+(`OLLAMA_NUM_PARALLEL=1`); a second, independent Ollama container gives real
+additional throughput instead of just letting more calls queue behind the
+same engine (see `docs/Devlog.md` 2026-09-14 for why raising the concurrency
+*number* alone doesn't help). It's built from the same `docker/Dockerfile`
+(`--target ollama-sidecar`) — a slightly lighter image (~2.2 GB vs. the app's
+~2.4 GB: same baked model, no Python/FastAPI or Unity build on top) — and the
+proxy load-balances across however many
+`OLLAMA_URLS` you give it:
+
+```sh
+docker compose -f compose.yaml -f compose.sidecar.yaml up --build
+```
+
+or by hand, with two plain containers on a shared network:
+
+```sh
+docker network create agentic-racing-net
+docker run -d --name ollama-2 --network agentic-racing-net \
+  ghcr.io/alulema/agentic-racing-ollama:latest
+docker run -p 8080:8080 --network agentic-racing-net \
+  -e OLLAMA_URLS="http://127.0.0.1:11434,http://ollama-2:11434" \
+  ghcr.io/alulema/agentic-racing:latest
+```
+
 ## Environment variables
 
 None are required — every one below has a working default.
@@ -143,12 +172,12 @@ None are required — every one below has a working default.
 | Variable | Default | Purpose |
 |---|---|---|
 | `OLLAMA_MODEL` | `llama3.2:3b` | Model served by the sidecar. |
-| `OLLAMA_URL` | `http://127.0.0.1:11434` | Where the proxy reaches Ollama. |
+| `OLLAMA_URLS` | `http://127.0.0.1:11434` | Comma-separated Ollama endpoints the proxy load-balances across. `OLLAMA_URL` (singular) still works as a one-endpoint shortcut. Add a second endpoint only if you've provisioned the [optional sidecar](#optional-a-second-ollama-for-more-strategy-call-capacity). |
 | `OLLAMA_KEEP_ALIVE` | `24h` | How long Ollama keeps the model loaded between calls. Must be a duration string, not the bare `-1` — Ollama rejects that as a string. |
 | `OLLAMA_NUM_THREAD` | `3` | CPU threads for inference. Leave one core free for the app itself — e.g. `3` on 4 vCPU, `1` on 2 vCPU. |
-| `OLLAMA_NUM_PARALLEL` / `OLLAMA_MAX_LOADED_MODELS` | `1` / `1` | Kept at 1: the proxy already serialises calls, so extra Ollama-side parallelism just fights the app for CPU. |
+| `OLLAMA_NUM_PARALLEL` / `OLLAMA_MAX_LOADED_MODELS` | `1` / `1` | Kept at 1 per Ollama process: each engine serves one call at a time by design. For more real throughput, add a second engine via `OLLAMA_URLS` above rather than raising this. |
 | `STRATEGY_TIMEOUT_S` | `45` | Per-call timeout. On expiry the car keeps its current directive. |
-| `STRATEGY_MAX_CONCURRENT` | `1` | Max strategy calls in flight at once. |
+| `STRATEGY_MAX_CONCURRENT` | one slot per `OLLAMA_URLS` endpoint | Max strategy calls in flight at once. Leave unset — it already matches your endpoint count. Setting it above that count with a single real endpoint reproduces a measured regression (`docs/Devlog.md` 2026-09-14): calls queue behind one engine instead of failing fast, and trip the circuit breaker more often. |
 | `STRATEGY_BREAKER_P95_MS` / `STRATEGY_BREAKER_COOLDOWN_S` | `35000` / `60` | Circuit-breaker threshold and cooldown before retrying the LLM after it trips to the heuristic fallback. |
 | `STATIC_DIR` | `/app/static` | Where the FastAPI app looks for the WebGL build. |
 | `PROJECT_ID`, `DEMO_SLOT` | `unknown` | Free-form identifiers logged at startup and echoed in `/api/health`, for correlating a running container with whatever provisioned it. Purely informational — nothing in the app behaves differently based on them. |
