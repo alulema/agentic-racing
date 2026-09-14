@@ -590,6 +590,36 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   es el que puede mover la aguja, no más ajuste de prompt. Detalle y tablas en
   `docs/Devlog.md`.
 
+  **[x] Cuarta corrida, probando `STRATEGY_MAX_CONCURRENT=3` (2026-09-14)**: mismas
+  18 carreras, mismo prompt, contenedor acotado a `--cpus=4 --memory=8g` (tamaño
+  objetivo del pod real) más `STRATEGY_MAX_CONCURRENT=3`
+  (`docs/experiments/fase6.3-mixed-field-18races-v4-concurrency3.json`). **Resultado
+  contraintuitivo: el `okRate` empeora**, de 36.0% a **9.5%**. La causa, visible en
+  el propio dato (`reason` de los 709 fallbacks): `offline` 621 (79%),
+  `transport: Request timeout` 78 (10%), `busy` solo 7 — exactamente al revés que
+  antes, cuando `busy` era el 98.7%. Con `OLLAMA_NUM_PARALLEL=1` sin cambiar (a
+  propósito — el paso barato era tocar solo el semáforo del proxy, no la
+  paralelización real de Ollama), subir `STRATEGY_MAX_CONCURRENT` deja pasar más
+  llamadas hacia Ollama, pero Ollama las sigue sirviendo una por una: las que antes
+  se rechazaban al instante (`busy`, 250 ms de espera) ahora esperan en cola real y
+  tardan más (`ok` que sí llegan: p50 15.7 s, p95 22.4 s, máx 42.5 s). Ese máximo
+  empuja el p95 de la ventana móvil de 20 muestras por encima de
+  `STRATEGY_BREAKER_P95_MS` (35 s) con más frecuencia, y cada disparo del
+  cortacircuitos mete **60 s** de modo offline total — durante los cuales *todas*
+  las llamadas de los 3 autos LLM caen sin ni intentar Ollama. Aflojar la puerta de
+  entrada sin aflojar el cuello de botella real simplemente cambia el tipo de
+  fallo, de "rechazo rápido" a "cola lenta que dispara el breaker" — y es
+  estrictamente peor para la frescura. Curiosamente, **la posición final casi no
+  cambia** (`heuristic` 2.24 ± 1.02, `llm` 4.76 ± 1.28, gap de tiempo 20.3 ± 9.0 s)
+  pese a que el `okRate` cayó a un tercio — indicio de que, ya con el prompt
+  corregido, las decisiones frescas del LLM no son tan distintas en agresividad de
+  lo que hace la heurística de respaldo, así que cuánto se usa una u otra pesa
+  menos que antes. **Conclusión**: no llevar `STRATEGY_MAX_CONCURRENT=3` a
+  producción tal cual — hace daño, no ayuda. Si se quiere revisitar la concurrencia,
+  hay que mover `OLLAMA_NUM_PARALLEL` junto con el semáforo del proxy (aceptando
+  más contención de CPU por llamada) o subir `STRATEGY_BREAKER_P95_MS` para tolerar
+  la cola — no el semáforo solo. Detalle y tablas en `docs/Devlog.md`.
+
 - [ ] **6.4 — Presupuesto de decisiones limitado (prioridad baja, esfuerzo medio-alto)**
   El jefe de equipo recibe un número fijo de "cambios de estrategia" disponibles por
   carrera (ej. 3 por auto) en vez de poder emitir directivas sin costo. Obliga al LLM a

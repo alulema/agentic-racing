@@ -3262,3 +3262,95 @@ llegó a producción, ver `docs/handoff.md`) es candidato mucho más fuerte
 para mover la posición final que seguir tocando el prompt.
 
 Limpieza: `docker rm -f fase63-exp` tras extraer y copiar el dataset.
+
+### Fase 6.3: cuarta corrida — probando `STRATEGY_MAX_CONCURRENT=3` (2026-09-14)
+
+Siguiente paso acordado tras la validación del prompt: si el techo actual es
+la concurrencia (`STRATEGY_MAX_CONCURRENT=1`, guardarraíles de Fase 5, §7),
+¿qué pasa si se relaja solo esa puerta de entrada, sin tocar el modelo ni
+`OLLAMA_NUM_PARALLEL` (que se deja en 1 a propósito — la pregunta es si el
+semáforo del proxy por sí solo es el cuello de botella)?
+
+Mismo harness, mismas 18 carreras (3 ciclos), mismo prompt (imagen de
+`main` post PR #17, sin cambios de código). Contenedor levantado con
+`--cpus=4 --memory=8g` (tamaño objetivo del pod real, `docs/handoff.md`) y
+`-e STRATEGY_MAX_CONCURRENT=3`.
+
+**Logística**: al abrir la pestaña, `document.hidden` volvió a leer `true`
+tras un clic sintético. Se le pidió al usuario un clic real en la ventana
+antes de comprometerse a la corrida larga; para cuando contestó ("Ya está en
+la última vuelta"), las 18 carreras casi habían terminado solas — el tiempo
+real que pasó esperando la respuesta fue más que suficiente. Buena señal de
+que, una vez con foco real, el sistema corre confiablemente sin más
+intervención.
+
+**Resultado — dataset completo**:
+`docs/experiments/fase6.3-mixed-field-18races-v4-concurrency3.json`
+(108 resultados, 2180 decisiones).
+
+| | `MAX_CONCURRENT=1` (run 3) | `MAX_CONCURRENT=3` (run 4) |
+|---|---|---|
+| posición `heuristic` | 2.26 ± 1.17 | 2.24 ± 1.02 |
+| posición `llm` | 4.74 ± 1.17 | 4.76 ± 1.28 |
+| gap `llm` (s) | 19.3 ± 10.0 | 20.3 ± 9.0 |
+| `okRate` llm | **36.0%** | **9.5%** |
+
+**El `okRate` empeoró, no mejoró — contraintuitivo, pero la causa queda clara
+en el propio dato.** Desglose de los 709 fallbacks de auto LLM (de 783
+decisiones totales):
+
+| `reason` | run 3 (n=529) | run 4 (n=709) |
+|---|---|---|
+| `busy` | 522 (98.7%) | 7 (1.0%) |
+| `offline` | 0 | **621 (87.6%)** |
+| `transport: Request timeout` | 2 (0.4%) | 78 (11.0%) |
+| `rejected` | 5 (0.9%) | 3 (0.4%) |
+
+Con `MAX_CONCURRENT=1`, casi todo el fallback era `busy`: la petición no
+conseguía el semáforo en los 250 ms de `slot_wait_s` y se rendía al
+instante — rápido, pero casi nunca fresco. Con `MAX_CONCURRENT=3`, `busy`
+casi desaparece (el semáforo ahora tiene margen), pero como
+`OLLAMA_NUM_PARALLEL` sigue en 1, Ollama sigue sirviendo una petición a la
+vez: las 2-3 peticiones que antes se rechazaban ahora *sí* llegan a Ollama y
+esperan en cola real. Las que sí completan tardan más (`ok`: p50 15.7 s,
+p95 22.4 s, máx 42.5 s — antes las que llegaban a completar no competían con
+otras 2 en cola). Ese máximo empuja el p95 de la ventana móvil de 20
+muestras (`server/guardrails.py::_Window`) por encima de
+`STRATEGY_BREAKER_P95_MS` (35 s) con más frecuencia, y cada disparo mete
+**60 s** de modo `offline` total (`breaker_cooldown_s`) — durante los cuales
+*ninguna* llamada de ningún auto LLM ni siquiera intenta Ollama. De ahí el
+87.6% de fallbacks marcados `offline`: no es que Ollama esté caído, es que
+el cortacircuitos decidió protegerlo y se quedó fuera de línea la mayor
+parte de la carrera.
+
+En resumen: aflojar la puerta de entrada (el semáforo) sin aflojar el cuello
+de botella real (Ollama sirviendo una petición a la vez) no gana nada — solo
+cambia el tipo de fallo, de "rechazo instantáneo" a "cola lenta que dispara
+el cortacircuitos", y el segundo es peor para la frescura porque además
+apaga el sistema entero por 60 s cada vez.
+
+**Hallazgo secundario, curioso**: pese a que el `okRate` cayó a un tercio, la
+posición final y el gap de tiempo prácticamente no cambiaron respecto a la
+corrida 3. Con el prompt ya corregido, una decisión fresca del LLM no es tan
+distinta en agresividad de lo que hace la heurística de respaldo — así que
+cuánto tiempo se pasa en una u otra pesa menos de lo que pesaba con el
+prompt viejo (donde una decisión fresca solía ser mucho más conservadora que
+la heurística). Otra forma de leer el mismo dato: el prompt fix ya cerró
+casi toda la brecha que la concurrencia podía cerrar.
+
+**Conclusión para Fase 7**: `STRATEGY_MAX_CONCURRENT=3` tal cual **no se
+lleva a producción** — degrada la frescura en vez de mejorarla. Si se quiere
+revisitar la concurrencia, la palanca correcta no es el semáforo del proxy
+solo: hay que mover `OLLAMA_NUM_PARALLEL` junto con él (aceptando más
+contención de CPU por llamada individual) o subir
+`STRATEGY_BREAKER_P95_MS` para que el sistema tolere la cola en vez de
+cortarla. Ninguna de las dos es el "paso barato" que se pensaba — cualquiera
+de las dos es una decisión de tuning con trade-offs reales, no un ajuste de
+una línea. Dado que el prompt fix ya logró la mejora grande y medible
+(sesgo conservador eliminado, gap de tiempo -60%), y que esta prueba muestra
+que la concurrencia es más delicada de lo que parecía, el siguiente paso
+razonable es dar por cerrada la exploración de tuning de Fase 6.3 y pasar a
+escribir el post técnico de Fase 7 con los cuatro datasets ya recolectados
+(runs 1-4) como evidencia.
+
+Limpieza: `docker rm -f fase63-exp` tras extraer y copiar el dataset.
