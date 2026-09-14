@@ -3452,3 +3452,89 @@ activo para medir el efecto real sobre `okRate`/posición/gap (equivalente al
 "run 5" de la serie), y luego coordinar con la infra de producción si vale
 la pena provisionar el segundo container ahí — eso último es decisión y
 trabajo del mantenedor de esa infra, fuera de este repo.
+
+### Fase 6.3: quinta corrida — sidecar activo, local (2026-09-14)
+
+Con el sidecar mergeado (#19) y la imagen `ghcr.io/alulema/agentic-racing-ollama`
+ya publicada, corresponde correr las 18 carreras de nuevo, esta vez con el
+segundo motor Ollama activo, para completar la serie de experimentos de
+Fase 6.3.
+
+**Setup**: `docker network create agentic-racing-net`; sidecar
+(`ghcr.io/alulema/agentic-racing-ollama:latest`, `--cpus=2 --memory=4g`) y app
+(`ghcr.io/alulema/agentic-racing:latest`, `--cpus=4 --memory=8g`,
+`OLLAMA_URLS=http://127.0.0.1:11434,http://fase63-ollama2:11434`) en la misma
+red. Se calentó el modelo del sidecar a mano (`entrypoint.sh` solo calienta el
+Ollama local del container de la app, no el sidecar) antes de arrancar.
+Mismo patrón de logística que las corridas anteriores: `document.hidden`
+volvió a leer `true` tras el clic sintético, se le pidió al usuario un clic
+real, confirmado, corrida arrancada.
+
+**Resultado — dataset completo**:
+`docs/experiments/fase6.3-mixed-field-18races-v5-sidecar-local.json`
+(108 resultados, 1856 decisiones).
+
+| | sin sidecar (run 4) | con sidecar (run 5) |
+|---|---|---|
+| posición `heuristic` | 2.24 ± 1.02 | 2.26 ± 1.09 |
+| posición `llm` | 4.76 ± 1.28 | 4.74 ± 1.25 |
+| gap `llm` (s) | 20.3 ± 9.0 | 22.4 ± 9.4 |
+| `okRate` llm | 9.5% | **9.3%** |
+
+**El sidecar no cambió nada, prácticamente cifra por cifra.** Desglose de los
+660 fallbacks de auto LLM (de 728 decisiones totales) esta vez sí muestra las
+tres causas mezcladas, no solo `offline` como en la run 4:
+
+| `reason` | run 4 (1 engine) | run 5 (2 engines) |
+|---|---|---|
+| `busy` | 1.0% | 41.5% |
+| `offline` | 87.6% | 27.3% |
+| `transport: Request timeout` | 11.0% | 30.9% |
+
+Las llamadas que sí completaron (n=68, `status:"ok"`) tardaron más que en la
+run 4, no menos: p50 21.2 s (vs 15.7 s), p95 24.4 s (vs 22.4 s). El sesgo
+conservador sigue corregido (`agg:low`/`risk:low` en 0% de los 68 casos), así
+que el problema no es el prompt ni el modelo — es que ambos motores Ollama
+tardan *más* por llamada individual que un solo motor sin competencia.
+
+**Causa, y por qué el resultado es honesto en vez de un bug**: esta máquina
+tiene **8 cores físicos** (`nproc`). Los dos containers Ollama (`--cpus=4` +
+`--cpus=2` = 6 cores de cupo nominal) comparten esos mismos 8 cores con
+Chrome renderizando el build WebGL de Unity (nada trivial) y con todo lo
+demás corriendo en la máquina durante la sesión. Un segundo motor Ollama
+*local* no le suma cómputo real al sistema — le suma **demanda** sobre el
+mismo cómputo fijo que ya había, exactamente el mismo problema de fondo que
+`STRATEGY_MAX_CONCURRENT=3` (run 4), solo que esta vez repartido entre dos
+procesos en vez de encolado en uno. Es justo la advertencia que el usuario
+hizo explícita al proponer la idea originalmente ("no sería partir el mismo
+pastel, sino asignar más recursos para un Ollama extra") y que quedó
+documentada en `docs/handoff.md` ("on top of, not carved out of, the app
+container's existing budget") — esta máquina de desarrollo no puede darle
+ese "on top of" a un segundo container, porque no tiene más que 8 cores para
+repartir entre absolutamente todo lo que corre en ella durante la prueba.
+
+**Lo que esta corrida SÍ valida y lo que NO puede validar**: el mecanismo
+del pool de endpoints funciona exactamente como se diseñó — verificado por
+separado con una prueba aislada de 3 llamadas concurrentes contra 2 engines
+(ver la entrada anterior de esta misma fecha): cada engine procesó
+*exactamente* una tarea, nunca las dos, confirmando en los logs de cada
+Ollama que el reparto es correcto a nivel de código. Lo que esta corrida de
+18 carreras **no puede** demostrar, en esta máquina, es el beneficio de
+capacidad real que el sidecar está diseñado para dar — eso requiere CPU
+genuinamente adicional (un segundo host, o un pod real con presupuesto
+ampliado), no dos containers compitiendo por el mismo procesador. Validar
+esa parte de la hipótesis queda fuera del alcance de una laptop de
+desarrollo y pasa a ser responsabilidad de quien aprovisione el pod de
+producción real, si decide darle al sidecar CPU/RAM que hoy no tiene.
+
+**Conclusión para Fase 7**: la serie completa de 5 corridas (18 carreras cada
+una) cuenta una historia honesta y completa: (1) el sesgo conservador del
+modelo era real y medible; (2) el ajuste de prompt lo corrigió casi del
+todo a nivel de decisión y redujo el gap de tiempo ~60%; (3) el cuello de
+botella remanente es cuántas decisiones llegan frescas, gobernado por
+cuánto cómputo real tiene Ollama disponible; (4) subir el semáforo del
+proxy sin más cómputo real lo empeora; (5) un segundo motor Ollama es la
+palanca conceptualmente correcta, con el código y el mecanismo ya validados,
+pero confirmar la ganancia real requiere CPU que este entorno de desarrollo
+no tiene para dar — queda como trabajo futuro documentado, no como resultado
+pendiente de esta fase.
