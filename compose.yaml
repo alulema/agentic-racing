@@ -7,6 +7,13 @@
 # baking the 2 GB model into an image on every change: here Ollama is its own
 # service with a named volume, and `ollama-init` pulls the model once into it.
 # The shippable single image is docker/Dockerfile.
+#
+# To test the optional second-Ollama sidecar (Fase 6.3, docs/Devlog.md
+# 2026-09-14 — real parallel inference, not just a bigger admission-gate
+# number) without touching this file's default single-Ollama shape, layer
+# compose.sidecar.yaml on top:
+#
+#   docker compose -f compose.yaml -f compose.sidecar.yaml up --build
 
 services:
   ollama:

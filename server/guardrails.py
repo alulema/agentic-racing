@@ -5,8 +5,17 @@ strategists queued against one CPU-only Ollama in a 2 vCPU pod. If calls pile
 up, the radio arrives minutes late and the pod chokes. These layers keep that
 from happening:
 
-1. Global concurrency gate — at most ``MAX_CONCURRENT`` (1-2) calls reach Ollama
-   at once. Anyone who can't get a slot quickly is told to fall back (§7.5).
+1. Global concurrency gate — at most one in-flight call per known Ollama
+   *endpoint* (§7.5, Fase 6.3). Anyone who can't get a slot quickly is told to
+   fall back. This used to be a single counting semaphore sized by
+   ``STRATEGY_MAX_CONCURRENT`` against one Ollama — raising that count alone
+   (tested 2026-09-14, docs/Devlog.md) just let more calls queue behind the
+   same single-threaded engine and made things *worse* (more circuit-breaker
+   trips, not more fresh replies). The fix isn't a bigger number, it's more
+   engines: the gate is now a small pool of endpoint URLs (one local, plus an
+   optional sidecar, Dockerfile's ``ollama-sidecar`` stage) — each admitted
+   call is assigned a specific endpoint, so two calls never queue behind the
+   same Ollama process.
 2. Circuit breaker — if recent calls are too slow (p95 over a threshold) or too
    many fail, flip to "offline" for a cooldown: ``/api/strategy`` returns a
    fallback immediately without touching Ollama, and the UI shows "modo
@@ -23,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 
@@ -48,7 +58,7 @@ class _Window:
 
 
 class GuardrailState:
-    """Owns the semaphore, the breaker, per-IP buckets and the health counters.
+    """Owns the endpoint pool, the breaker, per-IP buckets and the health counters.
 
     One instance per process, created in ``main``.
     """
@@ -56,7 +66,15 @@ class GuardrailState:
     def __init__(
         self,
         *,
-        max_concurrent: int = 1,
+        ollama_urls: Sequence[str] = ("http://127.0.0.1:11434",),
+        # None (default): one concurrency slot per URL in ``ollama_urls`` — the
+        # right number when every slot maps to a real, independent engine.
+        # An explicit int overrides that (round-robins ``ollama_urls`` to fill
+        # it) — kept only for the single-endpoint case and for tests; setting
+        # it above ``len(ollama_urls)`` reproduces the failure mode measured
+        # 2026-09-14 (queueing behind one engine trips the breaker more, not
+        # less) and should not be done with a single real endpoint.
+        max_concurrent: int | None = None,
         slot_wait_s: float = 0.25,
         breaker_p95_ms: int = 20_000,
         breaker_fail_streak: int = 3,
@@ -68,7 +86,11 @@ class GuardrailState:
         rate_limit_per_s: float = 1.0,
         rate_burst: int = 12,
     ) -> None:
-        self._sema = asyncio.Semaphore(max_concurrent)
+        urls = list(ollama_urls) or ["http://127.0.0.1:11434"]
+        slot_count = max_concurrent if max_concurrent is not None else len(urls)
+        self._endpoints: asyncio.Queue[str] = asyncio.Queue()
+        for i in range(max(1, slot_count)):
+            self._endpoints.put_nowait(urls[i % len(urls)])
         self._slot_wait_s = slot_wait_s
         self._inflight = 0
 
@@ -124,28 +146,39 @@ class GuardrailState:
     # -- concurrency slot ---------------------------------------------------
 
     class _Slot:
-        def __init__(self, parent: "GuardrailState") -> None:
-            self._parent = parent
+        """An async-context-manager slot bound to one Ollama endpoint.
 
-        async def __aenter__(self) -> None:
+        ``slot.url`` is the endpoint the caller must use for this call — with
+        more than one endpoint in the pool, two concurrently-held slots are
+        always bound to different URLs, so a call never queues behind another
+        call already in flight on the same Ollama process.
+        """
+
+        def __init__(self, parent: "GuardrailState", url: str) -> None:
+            self._parent = parent
+            self.url = url
+
+        async def __aenter__(self) -> "GuardrailState._Slot":
             self._parent._inflight += 1
+            return self
 
         async def __aexit__(self, *exc: object) -> None:
             self._parent._inflight -= 1
-            self._parent._sema.release()
+            self._parent._endpoints.put_nowait(self.url)
 
     async def acquire_slot(self) -> "GuardrailState._Slot | None":
-        """Try to get a concurrency slot within ``slot_wait_s``.
+        """Try to get a concurrency slot (bound to one endpoint) within
+        ``slot_wait_s``.
 
-        Returns an async-context-manager slot, or ``None`` if Ollama is too busy
-        (caller should fall back). The semaphore is acquired here and released by
-        the slot's ``__aexit__``.
+        Returns an async-context-manager slot, or ``None`` if every endpoint is
+        busy (caller should fall back). The endpoint is claimed here and
+        returned to the pool by the slot's ``__aexit__``.
         """
         try:
-            await asyncio.wait_for(self._sema.acquire(), timeout=self._slot_wait_s)
+            url = await asyncio.wait_for(self._endpoints.get(), timeout=self._slot_wait_s)
         except asyncio.TimeoutError:
             return None
-        return GuardrailState._Slot(self)
+        return GuardrailState._Slot(self, url)
 
     # -- health snapshot --------------------------------------------------
 

@@ -3354,3 +3354,101 @@ escribir el post técnico de Fase 7 con los cuatro datasets ya recolectados
 (runs 1-4) como evidencia.
 
 Limpieza: `docker rm -f fase63-exp` tras extraer y copiar el dataset.
+
+### Fase 6.3: sidecar de Ollama opcional — segundo motor real, no más semáforo (2026-09-14)
+
+Tras el resultado negativo de `STRATEGY_MAX_CONCURRENT=3` (entrada anterior),
+el usuario preguntó por qué no agregar un segundo container con Ollama en
+vez de seguir tocando el semáforo del proxy. Revisando `DEMO_INTEGRATION.md`
+con más cuidado (releído completo, no de memoria), la objeción original que
+puse — "rompe `docker run` sin orquestación externa", "duplica el peso de
+la imagen", "el presupuesto de CPU del pod es fijo" — no se sostenía: el
+contrato explícitamente soporta "recursos extra" declarados en el hand-off
+manifest (el propio ejemplo de referencia, `rag-blogposts`, corre 3 imágenes
+—app/ollama/db— en un solo pod), `docker compose` no es "orquestación
+externa" en el sentido que preocupa al contrato (el propio repo ya usa
+`compose.yaml` para dev), y una imagen nueva solo-Ollama pesa lo mismo o
+menos que duplicar la imagen completa de la app, no más. El único punto que
+sí sigue siendo cierto: la asignación real de más CPU al pod de producción
+la hace el mantenedor de esa infra (el propio usuario, en este caso, con
+otro sombrero) — no algo que este repo controle por sí solo.
+
+**Diseño implementado** (rama `fase6.3-ollama-sidecar`):
+
+- **`docker/Dockerfile`**: nuevo stage `ollama-sidecar` (imagen solo-Ollama,
+  reutiliza el stage `ollama-build` ya existente para no duplicar el
+  horneado del modelo), insertado *antes* del stage final de la app para
+  que `docker build .` sin `--target` siga construyendo la app por defecto
+  — el modo de un solo container no cambia en nada. Tamaño real medido con
+  `docker history` (la cifra de `docker images`, 4.24 GB, es un artefacto
+  de las attestations de `buildx`, no el tamaño real de contenido): **~2.2 GB**,
+  levemente más chico que la imagen de la app (~2.4 GB) porque no lleva
+  Python/FastAPI ni el build de Unity.
+- **`server/guardrails.py`**: el semáforo de conteo (`asyncio.Semaphore`) se
+  reemplazó por un pool de endpoints (`asyncio.Queue` sembrada con las URLs
+  de `OLLAMA_URLS`). Cada `acquire_slot()` devuelve un slot atado a una URL
+  específica — dos llamadas concurrentes nunca terminan atadas al mismo
+  Ollama. `max_concurrent` sigue existiendo como override explícito
+  (round-robin sobre las URLs dadas) solo para el caso de un único endpoint
+  y para poder reproducir en un test unitario, a propósito, la regresión
+  medida el 2026-09-13 (subir el número sin subir motores reales).
+- **`server/main.py`**: `OLLAMA_URL` (singular) pasa a `OLLAMA_URLS` (lista
+  separada por comas; `OLLAMA_URL` se sigue leyendo como atajo de un solo
+  endpoint, sin romper nada). `STRATEGY_MAX_CONCURRENT` sin declarar ahora
+  significa "un slot por endpoint en `OLLAMA_URLS`" en vez de un `1`
+  hardcodeado. `_ollama_reachable` sondea todos los endpoints en paralelo
+  (`asyncio.gather`) y reporta `True` si al menos uno responde.
+- **`server/tests/test_guardrails.py`** (nuevo): 5 tests unitarios puros de
+  asyncio sobre el pool — sin FastAPI, sin Ollama mockeado — verificando la
+  propiedad que importa: dos slots concurrentes nunca comparten URL, un slot
+  liberado vuelve al pool, y el modo de override explícito reproduce a
+  propósito la regresión de la corrida anterior como test, no solo como
+  hallazgo de un experimento de 2h. 22/22 tests pasan (17 previos + 5
+  nuevos), sin tocar ninguno existente.
+- **`compose.yaml` + `compose.sidecar.yaml`** (nuevo, archivo aparte): el
+  compose base no cambia — `compose.sidecar.yaml` es un override aditivo que
+  agrega un segundo servicio Ollama (`ollama-2`, su propio volumen) y pisa
+  `OLLAMA_URLS` en el servicio `app` para incluir ambos. Se activa con
+  `docker compose -f compose.yaml -f compose.sidecar.yaml up --build`.
+- **`docs/handoff.md`**: nueva sección "Optional Ollama sidecar" — declara
+  el segundo container como recurso extra opcional (mismo patrón que el
+  Postgres+pgvector de `rag-blogposts`), con el pedido explícito de que la
+  infra le asigne CPU/RAM *adicional* al pod, no una partición del
+  presupuesto actual. Explícito que si no se aprovisiona, nada cambia.
+- **`README.md`**: nueva sección opcional después de "Run", con las dos
+  formas de levantar el sidecar (compose o dos `docker run` en la misma red
+  de Docker). El `docker run` de un solo container sigue siendo el camino
+  por defecto documentado primero.
+- **`.github/workflows/build-and-publish.yml`**: job nuevo
+  `build-and-push-ollama-sidecar`, independiente de `build-webgl`
+  (el stage `ollama-sidecar` no necesita el output de Unity), publica
+  `ghcr.io/alulema/agentic-racing-ollama` con el mismo patrón
+  push-solo-en-main que ya usa la imagen de la app.
+
+**Validación local** (antes de abrir el PR):
+
+1. `docker build --target ollama-sidecar` — compila limpio, arranca, sirve
+   `llama3.2:3b` (`ollama list` lo confirma) en un container standalone.
+2. `docker build` sin `--target` (imagen de producción completa) — sigue
+   compilando y sirviendo exactamente igual que antes (`/api/health` ok,
+   un solo container, sin `OLLAMA_URLS` declarado).
+3. `docker compose -f compose.yaml -f compose.sidecar.yaml up --build` — dos
+   Ollama + la app, ambos modelos descargados, `/api/health` reporta
+   `ollama_reachable: true` (sondeó ambos endpoints).
+4. **Prueba de pool real**: 3 llamadas concurrentes a `/api/strategy` contra
+   los 2 engines — exactamente 2 consiguieron slot (una por endpoint,
+   confirmado en los logs de cada container Ollama: cada uno procesó
+   *exactamente una* tarea, nunca las dos), la 3ª cayó en `busy` de
+   inmediato. Las 2 que sí consiguieron slot tardaron los 45s completos del
+   timeout porque ningún engine había hecho el warm-up que sí hace
+   `entrypoint.sh` en producción (carga en frío del modelo, no un bug del
+   pool) — repetida la prueba con los engines ya calientes, ambas llamadas
+   concurrentes volvieron `status:"ok"` en ~9-10s cada una, en paralelo real
+   (confirmado por los timestamps: ambas terminan casi al mismo tiempo, no
+   una tras otra).
+
+**Pendiente**: correr una quinta ronda de 18 carreras con el sidecar
+activo para medir el efecto real sobre `okRate`/posición/gap (equivalente al
+"run 5" de la serie), y luego coordinar con la infra de producción si vale
+la pena provisionar el segundo container ahí — eso último es decisión y
+trabajo del mantenedor de esa infra, fuera de este repo.
