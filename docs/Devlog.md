@@ -3179,3 +3179,86 @@ llamadas — eso se preserva).
 cuantificar el cambio real en la distribución de `directive`/`aggression`/
 `risk` y en la posición final — las 4 pruebas manuales son solo humo, no
 confirmación.
+
+### Fase 6.3: tercera corrida — validando el ajuste de prompt (2026-09-14)
+
+Mismo harness, mismas 18 carreras (3 ciclos), contra la imagen publicada tras
+mergear el ajuste de prompt (PR #16, commit `84b2cdd`). Objetivo: saber si
+`_SYSTEM_RULES` nuevo realmente mueve la aguja, no solo si "se ve mejor" en
+4 pruebas manuales.
+
+**Logística de la corrida** (para el próximo intento, si hace falta): la
+máquina se apagó a mitad de la segunda corrida sin resultado, así que esta es
+en realidad el tercer intento de arrancar. Primer intento: `docker pull` de
+la imagen fresca (`sha256:9f4bd560...`, publicada por el run de CI
+`34779303608` tras el merge), contenedor levantado, `/api/health` OK. Al
+abrir la pestaña de Chrome, `document.hidden` volvió a dar `true` incluso
+después de un clic sintético — la misma señal de pestaña en segundo plano de
+sesiones anteriores. Como esta vez no hubo reinicio de máquina de por medio
+(la corrida previa exitosa de 18 carreras solo funcionó tras un reboot), se
+le pidió al usuario que hiciera clic real en la ventana de Chrome antes de
+comprometerse a ~2h de corrida desatendida — con eso, `hidden` pasó a
+`false` y se mantuvo así en cada chequeo de los siguientes ~2h20 hasta el
+final. Lección: `document.hidden===true` tras un clic sintético (vía CDP) no
+es señal suficiente de que la pestaña esté realmente en primer plano en este
+entorno Wayland; un clic físico del usuario sí lo es. Antes de una corrida
+larga, vale la pena pedir esa confirmación en vez de arrancar y descubrir el
+freeze 20-30 minutos después.
+
+**Resultado — dataset completo**:
+`docs/experiments/fase6.3-mixed-field-18races-v3-prompt-fix.json`
+(108 resultados, 2313 decisiones).
+
+| | heuristic | llm (run 3) | llm (run 2, prompt viejo) |
+|---|---|---|---|
+| posición media ± SD | 2.26 ± 1.17 | 4.74 ± 1.17 | 5.00 ± 0.82 |
+| gap medio ± SD (s) | 3.72 ± 5.87 | 19.32 ± 9.97 | 47.91 ± 17.87 |
+| overtakes | 3461 | 1539 | 1476 |
+| incidentes | 2201 | 1316 | 813 |
+| decisiones totales | 1487 | 826 | 682 |
+| `okRate` (fresca vs fallback) | 0% (n/a) | **36.0%** | 41.6% |
+
+**A nivel de decisión, filtrando a respuestas LLM realmente frescas
+(`status:"ok"`, n=297 de 826), el sesgo conservador prácticamente
+desaparece** — justo lo que el prompt se propuso arreglar:
+
+| | run 2 (prompt viejo) | run 3 (prompt nuevo) |
+|---|---|---|
+| `aggression: low` | 47.2% | **0.3%** |
+| `risk: low` | 43.7% | **0.3%** |
+| `directive: conserve` | 7.0% | **0.3%** |
+| `directive: attack` | 10.9% | **23.9%** |
+| `directive: defend` | 76.4% | 68.7% |
+
+El prompt corrigió el razonamiento del modelo casi por completo cuando el
+modelo efectivamente contesta. El **gap de tiempo** contra el líder también
+se achica fuerte: 19.3 s de media contra 47.9 s antes, una reducción de
+~60%. Eso es una señal real y grande, no ruido.
+
+**Pero la posición final casi no se mueve** (4.74 vs 5.00, gap de 2.48
+posiciones contra 3.00 antes — una mejora modesta, no el vuelco que el
+cambio a nivel de decisión hace esperar). La razón queda expuesta en el
+propio dato: el `okRate` no mejoró — de hecho bajó levemente, de 41.6% a
+36.0% — y el 522/529 (98.7%) del resto de decisiones LLM sigue cayendo en
+fallback por `reason:"busy"` (el semáforo de concurrencia
+`STRATEGY_MAX_CONCURRENT`, no JSON inválido ni timeout). Con solo ~1 de cada
+3 llamadas de auto LLM recibiendo una respuesta fresca, la mayoría del
+tiempo esos autos corren con la directiva heurística de respaldo de todos
+modos — el prompt nuevo no tiene oportunidad de aplicarse la mayor parte de
+la carrera.
+
+**Conclusión honesta para la Fase 7**: el sesgo conservador del modelo
+*sí* era real y el ajuste de prompt *sí* lo corrige, medido con datos, no
+solo impresión cualitativa — pero no es el techo actual del sistema. El
+techo es la concurrencia: con `OLLAMA_NUM_PARALLEL=1` y
+`STRATEGY_MAX_CONCURRENT=1` (guardarraíles de Fase 5, ver §7), la mayoría de
+las decisiones de los 3 autos LLM en cada carrera nunca llegan a pedirle
+nada fresco al modelo. Los dos efectos son medibles y separables: el prompt
+mueve la calidad de la decisión cuando se toma; la concurrencia decide
+cuántas veces eso importa. El siguiente paso barato pendiente
+(`STRATEGY_MAX_CONCURRENT=3`, probado con `docker run --cpus=N` para
+simular el pod real de 4 vCPU / 8 GiB — confirmar primero si esa asignación
+llegó a producción, ver `docs/handoff.md`) es candidato mucho más fuerte
+para mover la posición final que seguir tocando el prompt.
+
+Limpieza: `docker rm -f fase63-exp` tras extraer y copiar el dataset.
