@@ -35,9 +35,10 @@ private infra repo; this project does not touch Azure or OIDC.
 
 ## Pod sizing (target)
 
-Single ephemeral pod, **4 vCPU / 8 GiB** (an upgrade request was submitted;
-confirm it landed, otherwise the app still runs on 2 vCPU / 4 GiB with
-`OLLAMA_NUM_THREAD=1` and slower strategy calls). CPU is biased to inference —
+Single ephemeral pod, **4 vCPU / 8 GiB** — the upgrade request was submitted and
+**confirmed approved** (2026-09-15); `OLLAMA_NUM_THREAD=3` (the image's default)
+is the right value for this sizing, not the 2-vCPU fallback of `1`. CPU is biased
+to inference —
 Ollama gets the bulk, the FastAPI proxy is light (static file serving + one
 proxied POST at a time). No GPU; the CUDA/ROCm/Vulkan runtimes are stripped from
 the image (final image ~4.5 GB, of which ~2 GB is the baked model).

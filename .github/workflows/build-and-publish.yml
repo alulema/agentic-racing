@@ -165,6 +165,17 @@ jobs:
   # Unity output at all, so this job doesn't wait on either of them and
   # publishes on its own schedule. Same push:false-on-PR pattern as the app
   # image — proves the stage still builds without publishing it.
+  #
+  # Multi-arch (amd64 + arm64): the whole point of this image is to run on
+  # genuinely separate hardware from wherever the app container lives —
+  # that hardware won't always be amd64 (e.g. an Apple Silicon Mac on the
+  # same network, Fase 6.3 run 6). QEMU lets the amd64 runner cross-build the
+  # arm64 layer, including actually running `ollama serve`/`ollama pull`
+  # under emulation to bake the model (slow but correct — it's a network
+  # download + a health-check poll, not CPU-bound). Without this, an
+  # Apple Silicon host would run the image translated (Rosetta/QEMU) instead
+  # of native, which would confound exactly the CPU-contention question this
+  # sidecar exists to answer.
   build-and-push-ollama-sidecar:
     runs-on: ubuntu-latest
     permissions:
@@ -172,6 +183,10 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
@@ -185,6 +200,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           target: ollama-sidecar
+          platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
             ${{ env.OLLAMA_SIDECAR_IMAGE }}:latest
