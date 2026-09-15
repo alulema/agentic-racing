@@ -668,13 +668,42 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   para quien aprovisione el pod de producción real, no como pendiente de
   esta fase. Detalle completo en `docs/Devlog.md`.
 
-  Con esto se da por **cerrada la serie de experimentos de Fase 6.3** (5
-  corridas de 18 carreras): sesgo conservador confirmado y corregido, gap de
-  tiempo reducido ~60%, el cuello de botella remanente identificado como
-  cómputo real disponible para Ollama (no el prompt, no el semáforo del
-  proxy), y la palanca correcta (más motores reales) implementada y con su
-  mecanismo validado, aunque su beneficio de capacidad no se pudo confirmar
-  en una máquina de desarrollo de un solo host. Datos suficientes y honestos
+  **[x] Sexta corrida, sidecar en CPU genuinamente separada — MacBook M1
+  (2026-09-15)**: la prueba que la corrida 5 dejó pendiente. Imagen del
+  sidecar multi-arch (`amd64`+`arm64`, PR #21) corriendo nativa en una Mac en
+  la misma red, no en la máquina de desarrollo. `OLLAMA_URLS` con ambos
+  endpoints. Resultado (`docs/experiments/fase6.3-mixed-field-18races-v6-sidecar-mac.json`):
+  el `okRate` **por fin sube fuerte, de 9.3% a 57.5%** — la muestra de
+  decisiones frescas más grande de las seis corridas (353), con `busy`
+  volviendo a ser la causa dominante de fallback en vez de `offline` (el
+  cortacircuitos casi no se disparó). Confirma sin ambigüedad que el
+  mecanismo del sidecar funciona cuando de verdad hay CPU adicional detrás.
+  Incidente honesto durante la corrida: la Mac se suspendió por ahorro de
+  energía ~15-20 min a mitad de camino (endpoint inalcanzable, timeouts de
+  transporte durante esa ventana); no se reinició la corrida, queda
+  documentado como parte del dato, no oculto.
+
+  **Pero la posición final no mejoró — de hecho, es la peor de las últimas
+  cuatro corridas** (4.87 vs 4.74-4.76 antes) pese a que la frescura casi se
+  duplicó. Comparando la heurística contra las 353 decisiones LLM realmente
+  frescas: la heurística elige `attack` 56.1% / `aggression:high` 59.7%; el
+  LLM fresco elige `defend` 63.7% / `aggression:high` solo 26.1%. Sin el
+  sesgo roto de "low/low" de antes, pero con un estilo estructuralmente más
+  defensivo que la heurística. **Esa diferencia de estilo, no la
+  infraestructura, es la explicación más plausible de la brecha que
+  sobrevive incluso con frescura al 57.5%.**
+
+  Con esto se da por **cerrada la serie de experimentos de Fase 6.3** (6
+  corridas de 18 carreras, dos actos): (1) el sesgo conservador del modelo
+  era real, medible, y se corrigió con el prompt — gap de tiempo -60%; (2)
+  perseguir más frescura de respuesta —mal con el semáforo solo, sin efecto
+  con un motor local sin CPU libre, y finalmente con éxito claro con CPU
+  genuinamente separada— no movió la posición final, porque el techo real
+  nunca fue la frescura: es que el LLM, incluso razonando bien y a tiempo,
+  sigue siendo genuinamente más conservador en estilo que la heurística de
+  referencia. Ese residuo ya no es un bug de prompt ni un límite de
+  infraestructura — es, probablemente, el límite real de lo que este modelo
+  de 3B aporta como estratega en este dominio. Datos suficientes y honestos
   para el post técnico de Fase 7.
 
 - [ ] **6.4 — Presupuesto de decisiones limitado (prioridad baja, esfuerzo medio-alto)**

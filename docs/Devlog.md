@@ -3538,3 +3538,100 @@ palanca conceptualmente correcta, con el código y el mecanismo ya validados,
 pero confirmar la ganancia real requiere CPU que este entorno de desarrollo
 no tiene para dar — queda como trabajo futuro documentado, no como resultado
 pendiente de esta fase.
+
+### Fase 6.3: sexta corrida — sidecar con CPU genuinamente separada (MacBook M1) (2026-09-15)
+
+Con el sidecar multi-arch publicado (#21) y el upgrade del pod de producción a
+4 vCPU confirmado, correspondía la prueba que la corrida 5 dejó pendiente:
+un segundo motor Ollama en hardware *realmente* separado, no compitiendo por
+los mismos 8 núcleos que la máquina de desarrollo. El usuario ofreció su
+MacBook Pro M1 de 16" en la misma red.
+
+**Setup**: en la Mac, `docker pull ghcr.io/alulema/agentic-racing-ollama:latest`
+(la variante `arm64` del manifest multi-arch, corriendo nativa, sin
+Rosetta/QEMU) y `docker run -p 11434:11434 ...`. Verificado desde la máquina
+Linux: `curl http://192.168.0.130:11434/api/version` responde, `ollama list`
+muestra `llama3.2:3b`. Calentar el modelo tomó 7.4 s — notablemente más rápido
+que los ~20 s del sidecar local de la corrida 5, primera señal de que ahí sí
+había CPU libre de verdad. App levantada con
+`OLLAMA_URLS=http://127.0.0.1:11434,http://192.168.0.130:11434`. Prueba de
+sanity antes de comprometerse a la corrida larga: 3 llamadas concurrentes,
+2 consiguieron slot (una a cada motor) y completaron en paralelo real
+(~27-30 s cada una, no en serie), la 3ª cayó en `busy` — mecanismo correcto.
+
+**Incidente durante la corrida**: alrededor de la carrera 13/18, la Mac se
+suspendió (ahorro de energía) y el endpoint quedó inalcanzable
+(`curl` a `192.168.0.130:11434` — `Connection timed out`) por una ventana de
+~15-20 minutos, visible como decisiones y carrera estancadas en los chequeos
+de monitoreo. El usuario la despertó manualmente; para cuando se confirmó la
+reconexión, la corrida ya había terminado sola (la ventana de indisponibilidad
+generó una ráfaga de `transport: Request timeout` en las llamadas dirigidas a
+ese endpoint durante ese lapso, visible en el desglose de abajo). No se
+reinició la corrida — con 1729 decisiones y 18 carreras completas, la ventana
+de indisponibilidad es una fracción menor del total y queda documentada, no
+oculta.
+
+**Resultado — dataset completo**:
+`docs/experiments/fase6.3-mixed-field-18races-v6-sidecar-mac.json`
+(108 resultados, 1729 decisiones).
+
+| | run 3 (prompt fix) | run 4 (`MAX_CONC=3`) | run 5 (sidecar local) | **run 6 (sidecar Mac)** |
+|---|---|---|---|---|
+| posición `heuristic` | 2.26 ± 1.17 | 2.24 ± 1.02 | 2.26 ± 1.09 | 2.13 ± 0.96 |
+| posición `llm` | 4.74 ± 1.17 | 4.76 ± 1.28 | 4.74 ± 1.25 | 4.87 ± 1.07 |
+| gap `llm` (s) | 19.3 ± 10.0 | 20.3 ± 9.0 | 22.4 ± 9.4 | 21.2 ± 8.3 |
+| `okRate` llm | 36.0% | 9.5% | 9.3% | **57.5%** |
+| fallback dominante | `busy` (98.7%) | `offline` (87.6%) | mixto | `busy` (55.6%) |
+
+**El `okRate` por fin sube fuerte — con CPU realmente separada, no solo
+declarada separada.** 353 decisiones frescas (la muestra más grande de las
+seis corridas), con `busy` volviendo a ser la causa dominante de fallback
+(55.6%, vs `offline` dominando en las corridas 4-5) — señal de que el
+cortacircuitos de latencia casi no se disparó esta vez, porque las llamadas
+que sí completaron mantuvieron latencias normales (p50 17.8 s, p95 22.8 s,
+sin la cola artificial de antes). De los 261 fallbacks, 72 fueron
+`transport: Request timeout` — casi seguro la ventana de la Mac dormida,
+concentrada en un tramo de la corrida, no repartida parejo.
+
+**Pero la posición final no mejoró — de hecho es la peor de las cuatro
+últimas corridas** (4.87 vs 4.74-4.76 antes), pese a que la frescura casi se
+duplicó. Este es el hallazgo que cierra la exploración de infraestructura de
+Fase 6.3: **una vez corregido el sesgo del prompt (corrida 3), más frescura
+no se traduce en mejor resultado**, porque la distribución de decisiones
+frescas del LLM y la de la heurística de respaldo ya no son tan distintas
+entre sí. Comparando la heurística contra las 353 decisiones LLM
+genuinamente frescas de esta corrida:
+
+| | `heuristic` | `llm` (fresco, n=353) |
+|---|---|---|
+| `directive: attack` | 56.1% | 24.4% |
+| `directive: defend` | 37.8% | 63.7% |
+| `aggression: high` | 59.7% | 26.1% |
+| `aggression: medium` | 40.3% | 73.7% |
+
+Incluso con el sesgo de "low/low" eliminado desde la corrida 3, el LLM sigue
+siendo estructuralmente más defensivo y menos agresivo que la heurística
+fija — no en el sentido roto de antes (nunca elige "bajo"), sino en una
+diferencia de estilo más sutil y persistente: prefiere `defend` sobre
+`attack` en una proporción casi invertida respecto a la heurística, y rara
+vez elige `aggression:high`. **Esa diferencia de estilo, no la
+infraestructura, es la explicación más plausible de la brecha de posición
+que sobrevive incluso con la frescura al 57.5%.**
+
+**Conclusión, cerrando la exploración de Fase 6.3**: las seis corridas
+cuentan una historia completa y honesta en dos actos. Acto uno (corridas 1-3):
+el sesgo conservador del modelo era real, medible, y se corrigió con el
+prompt — efecto grande y confirmado (gap de tiempo -60%). Acto dos (corridas
+4-6): perseguir más frescura de respuesta —primero mal (semáforo sin más
+motor real), después bien (motor real, pero local, sin ganancia porque
+compite por el mismo cómputo), finalmente con éxito (motor en hardware
+separado, frescura del 9% al 57.5%)— no movió la posición final, porque el
+techo real nunca fue la frescura: es que el estilo de juego del LLM, incluso
+razonando bien y a tiempo, sigue siendo genuinamente más conservador que la
+heurística de referencia. Ese residuo ya no es un bug de prompt ni un límite
+de infraestructura — es, probablemente, el límite real de lo que este modelo
+de 3B aporta como estratega en este dominio. Dato honesto y completo para el
+post técnico de Fase 7.
+
+Limpieza: `docker rm -f fase63-exp` en la máquina Linux; sidecar de la Mac a
+detener por separado (`docker rm -f racing-ollama-sidecar`).
