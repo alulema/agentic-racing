@@ -703,8 +703,36 @@ el tiempo aprieta, en el orden dado (4 es la primera en sacrificarse, 1 la últi
   sigue siendo genuinamente más conservador en estilo que la heurística de
   referencia. Ese residuo ya no es un bug de prompt ni un límite de
   infraestructura — es, probablemente, el límite real de lo que este modelo
-  de 3B aporta como estratega en este dominio. Datos suficientes y honestos
-  para el post técnico de Fase 7.
+  de 3B aporta como estratega en este dominio.
+
+  **[x] Séptima corrida, validando el ajuste contra el sesgo de "defend"
+  (2026-09-15)**: el hallazgo de la corrida 6 llevó a instrumentar la causa
+  con escenarios controlados contra el modelo real — en el caso "attack" más
+  inequívoco posible (rival adelante a 0.8s, nada detrás a 4.0s estable), el
+  modelo elegía `defend` 5 de 5 veces. Ajuste de prompt (`_SYSTEM_RULES`):
+  segunda calibración explícita contra el default a defender, comparación
+  numérica explícita de `gap_ahead`/`gap_behind`, y `target_rival` redefinido
+  sin ambigüedad. La verificación aislada tras el ajuste seguía sin ceder en
+  ese mismo caso extremo — desalentador — pero la corrida completa de 18
+  carreras (mismo setup de CPU real en la Mac) mostró **mejora real**: gap de
+  posición 2.74 → **2.12** (-23%), gap de tiempo 21.2 s → **13.5 s** (-36%).
+  A nivel de decisión fresca (n=391, la muestra más grande de la serie):
+  `attack` sube de 24.4% a 33.8%, `defend` baja de 63.7% a 52.7%,
+  `aggression:high` casi se duplica (26.1%→43.5%). El sesgo no desaparece —
+  sigue habiendo una brecha real con la heurística (`attack` 54.3%,
+  `aggression:high` 57.7%) — pero se mueve de verdad. Lección aparte: un
+  test unitario aislado (5 muestras, un escenario extremo) subestimó el
+  efecto real medido a escala sobre cientos de decisiones — el benchmark
+  completo, no el test controlado, es lo que mide lo que importa.
+
+  Con esto se cierra definitivamente la exploración de Fase 6.3 — **siete
+  corridas de 18 carreras** en total, dos hallazgos de fondo corregidos con
+  prompt engineering (el sesgo de "low/low" y, parcialmente, el sesgo hacia
+  "defend"), la infraestructura de concurrencia entendida y con su palanca
+  correcta validada, y un residuo de estilo entre el LLM y la heurística que
+  queda documentado como el límite real de este modelo de 3B en este
+  dominio, no como trabajo pendiente. Datos suficientes y honestos para el
+  post técnico de Fase 7.
 
 - [ ] **6.4 — Presupuesto de decisiones limitado (prioridad baja, esfuerzo medio-alto)**
   El jefe de equipo recibe un número fijo de "cambios de estrategia" disponibles por

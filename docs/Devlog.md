@@ -3635,3 +3635,61 @@ post técnico de Fase 7.
 
 Limpieza: `docker rm -f fase63-exp` en la máquina Linux; sidecar de la Mac a
 detener por separado (`docker rm -f racing-ollama-sidecar`).
+
+### Fase 6.3: séptima corrida — validando el ajuste contra el sesgo de "defend" (2026-09-15)
+
+Tras el ajuste de prompt de la entrada anterior (PR #23) y su verificación
+controlada desalentadora (5/5 muestras del caso "attack" más inequívoco
+seguían devolviendo `defend`), correspondía correr las 18 carreras completas
+de todos modos, con el mismo setup de CPU real (sidecar en la Mac M1) que
+dio la señal más limpia en la corrida 6.
+
+**Resultado — dataset completo**:
+`docs/experiments/fase6.3-mixed-field-18races-v7-defend-bias-fix.json`
+(108 resultados, 1710 decisiones).
+
+| | run 6 (antes del ajuste) | run 7 (después) |
+|---|---|---|
+| posición `heuristic` | 2.13 ± 0.96 | 2.44 ± 1.23 |
+| posición `llm` | 4.87 ± 1.07 | 4.56 ± 1.45 |
+| **gap de posición** | 2.74 | **2.12** |
+| gap `llm` (s) | 21.2 ± 8.3 | **13.5 ± 11.8** |
+| `okRate` llm | 57.5% | 55.1% (comparable) |
+
+**Mejora real y medible, en la dirección correcta, en ambas métricas
+primarias** — el gap de posición se achica ~23%, el gap de tiempo ~36%.
+Contra lo que sugería la verificación aislada, el ajuste sí tuvo efecto a
+escala real. Comparando la distribución de decisiones LLM frescas
+(`status:"ok"`, n=391 esta vez, la muestra más grande hasta ahora):
+
+| | run 6 (n=353) | run 7 (n=391) | `heuristic` |
+|---|---|---|---|
+| `directive: attack` | 24.4% | **33.8%** | 54.3% |
+| `directive: defend` | 63.7% | **52.7%** | 38.9% |
+| `aggression: high` | 26.1% | **43.5%** | 57.7% |
+
+`attack` sube ~9 puntos, `defend` baja ~11, `aggression:high` casi se
+duplica. El sesgo no desapareció — el LLM sigue defendiendo más y
+atacando menos que la heurística, la brecha con la heurística sigue siendo
+grande — pero se movió de verdad, en la dirección que el ajuste buscaba.
+
+**Por qué la verificación aislada subestimó el efecto**: el escenario de
+prueba (rival adelante a 0.8s, nada detrás a 4.0s estable) es un caso
+extremo, mucho más nítido que la telemetría típica de una carrera real
+(donde los gaps rara vez son tan limpios y unidireccionales, y suele haber
+más de un rival, más contexto en las notas, un evento distinto cada vez).
+Cinco muestras de un solo escenario artificial no representan bien el
+comportamiento promedio sobre cientos de situaciones reales y variadas —
+una lección tan válida para evaluar LLMs como cualquier otra: un test
+unitario aislado y un benchmark a escala pueden apuntar en direcciones
+distintas, y solo el segundo mide lo que realmente importa para el
+resultado agregado.
+
+**Conclusión**: el ajuste queda como mejora confirmada, no como fix
+completo. El sesgo hacia "defend" es real, parcialmente corregible con
+prompt engineering (igual que el sesgo original de "low/low" lo fue), pero
+no se puede eliminar del todo con este modelo de 3B — un residuo
+estructural que separa el estilo del LLM del de la heurística de
+referencia incluso en el mejor caso medido hasta ahora. Con esto se cierra
+definitivamente la exploración de Fase 6.3 (siete corridas en total).
+Detalle completo en `docs/experiments/`.
