@@ -3693,3 +3693,33 @@ estructural que separa el estilo del LLM del de la heurística de
 referencia incluso en el mejor caso medido hasta ahora. Con esto se cierra
 definitivamente la exploración de Fase 6.3 (siete corridas en total).
 Detalle completo en `docs/experiments/`.
+
+### Post "¿Cómo aprende un agente?" (serie RL desde cero) + corrección de unidades del Devlog (2026-10-02)
+
+Primer artículo de una serie de RL desde cero que usa este repo como laboratorio, publicado en
+`alulema/personal-website` (ES + EN). Todos los datos del piloto RL (observaciones, acciones,
+recompensa, fin de episodio, hiperparámetros, métricas de race01–08) se verificaron contra
+`RaceAgent.cs`, `TrainingArena.cs`, `CarController.cs`, `race_ppo.yaml` y esta bitácora.
+
+**Corrección a entradas anteriores de este Devlog**, encontrada al verificar el post:
+`Environment/Episode Length` de ML-Agents cuenta **pasos de decisión** (los que recibe el trainer
+de Python), no pasos de física. Con `DecisionPeriod = 5` y `fixedDeltaTime = 0.02`, cada paso es
+0.1 s. Las conversiones de arriba lo trataron como pasos de física y subestiman la duración de los
+episodios 5×: "~150 steps (~3 s)" son ~15 s, "~113 (~2.3 s)" son ~11 s, y en race07 el "97% de los
+intentos mueren en <2 s" son en realidad episodios de ~10–12 s que terminan `offTrack` a ~200 m,
+en la primera curva de verdad. La evidencia está en la propia bitácora: race04 da Episode Length
+155 en TensorBoard y 673 pasos de física (~13 s) en el eval harness (673 / 5 ≈ 135). El
+diagnóstico de fondo no cambia (el agente llega a la curva y no descubre la maniobra), pero las
+duraciones sí. Lo mismo aplica al `gamma` 0.995: se descuenta por decisión, horizonte efectivo
+~200 decisiones ≈ 20 s.
+
+Otras precisiones que quedaron en el post: el 82% de la heurística de diagnóstico fue su mejor
+episodio de 24 (18 terminaron `stuck`), no su promedio; race01–08 corrieron con `MaxStep = 4000`
+(el 6000 actual es posterior al circuito fijo); y la subida de ~35–40% de la recompensa en race07
+no es atribuible solo a las observaciones de curvatura, porque esa corrida también cambió la
+recompensa de velocidad.
+
+Discrepancia abierta, no resuelta: el comentario de `CarController.Awake` atribuye a CCD
+(`CollisionDetectionMode.Continuous`) un frenazo fantasma "que persiguió a race01-08 (Devlog
+2026-09-08)", pero esta bitácora no tiene esa entrada y la de 2026-09-08 dice que la parálisis
+"era de las pistas procedurales". El post no menciona CCD.
