@@ -3723,3 +3723,21 @@ Discrepancia abierta, no resuelta: el comentario de `CarController.Awake` atribu
 (`CollisionDetectionMode.Continuous`) un frenazo fantasma "que persiguió a race01-08 (Devlog
 2026-09-08)", pero esta bitácora no tiene esa entrada y la de 2026-09-08 dice que la parálisis
 "era de las pistas procedurales". El post no menciona CCD.
+
+### Post parte 2 de la serie RL: PPO explicado desde cero (2026-10-03)
+
+Segundo artículo de la serie, publicado en `alulema/personal-website` (ES + EN). Los detalles de
+PPO se verificaron contra el código de `mlagents` 1.1.0 (tag `python-packages_1.1.0` del repo de
+ML-Agents), no contra documentación: la razón de probabilidades se calcula y recorta **por
+dimensión de acción** (tres razones para steer/throttle/brake), la pérdida de valor también se
+recorta con ε, el crítico es una red separada con los mismos `network_settings`, y los schedules
+lineales terminan en lr 1e-10, ε 0.1 y β 1e-5 al llegar a `max_steps`.
+
+Precisiones que salieron al verificar contra esta bitácora:
+- El piloto RL **sí** completó vueltas a veces: 2–4% de los episodios terminan en `lap`
+  (race05–08). Lo correcto es "nunca aprendió a darlas de forma consistente".
+- race01 corrió con `beta` 0.005; el 0.01 actual es desde race02.
+- Con `MaxStep = 4000` (800 decisiones), el `time_horizon: 1000` nunca cortó una trayectoria en
+  race01–08: el bootstrap del crítico solo actuó en los cortes por tiempo.
+- BC + GAIL se configuraron para race08 pero esa corrida se hizo con PPO limpio; esta bitácora no
+  registra métricas de ninguna corrida con imitación.
