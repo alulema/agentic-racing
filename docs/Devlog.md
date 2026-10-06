@@ -3741,3 +3741,22 @@ Precisiones que salieron al verificar contra esta bitácora:
   race01–08: el bootstrap del crítico solo actuó en los cortes por tiempo.
 - BC + GAIL se configuraron para race08 pero esa corrida se hizo con PPO limpio; esta bitácora no
   registra métricas de ninguna corrida con imitación.
+
+### Post parte 3 de la serie RL: Behavioral Cloning (2026-10-06)
+
+Tercer artículo, publicado en `alulema/personal-website` (ES + EN). Al verificarlo contra este repo
+quedó claro el estado real de la imitación: existe el experto (`RaceAgent.Heuristic()`), el grabador
+(`eval.exe -record`, que agrega un `DemonstrationRecorder` por auto) y las instrucciones de
+`training/README.md` §6, pero esta bitácora no registra ninguna grabación ni ninguna corrida con BC.
+
+Cosas que el post saca de acá y que conviene tener presentes si se retoma BC:
+- `training/README.md` §6 paso 3 dice que `race_ppo.yaml` "ya trae los bloques behavioral_cloning +
+  gail"; ya no los trae. Habría que volver a agregarlos.
+- `-record` activa `CleanSpawn`: las demos arrancarían centradas, alineadas y a 14 m/s, mientras que
+  el entrenamiento arranca con ±10°, ±2 m y 8 m/s. Covariate shift desde el primer paso; convendría
+  grabar también desde arranques con ruido una vez que la heurística los tolere.
+- La heurística no es función de las 42 observaciones: filtra el volante con el comando anterior y
+  usa temporizadores (`_wallJamTimer`, `_escapeUntil`) para la reversa de escape. Una policy sin
+  memoria no puede imitar exactamente esas maniobras.
+- Con un experto programado, DAgger sería barato (correr la heurística en la sombra sobre los estados
+  que visita la policy), pero ML-Agents no lo trae y habría que construirlo.
