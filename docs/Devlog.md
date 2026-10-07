@@ -3760,3 +3760,19 @@ Cosas que el post saca de acá y que conviene tener presentes si se retoma BC:
   memoria no puede imitar exactamente esas maniobras.
 - Con un experto programado, DAgger sería barato (correr la heurística en la sombra sobre los estados
   que visita la policy), pero ML-Agents no lo trae y habría que construirlo.
+
+### Post parte 4 de la serie RL: GAIL (2026-10-07)
+
+Cuarto artículo, publicado en `alulema/personal-website` (ES + EN). GAIL corrió la misma suerte que
+BC: el bloque `gail` (`strength 0.15`, `use_actions: true`) se configuró para race08 y se quitó antes
+de lanzarla; no hay discriminador entrenado ni métricas.
+
+Si se retoma la imitación, dos cosas que el post saca de leer `mlagents` 1.1.0 contra esta config:
+- **El 0.15 no es un peso chico.** La recompensa de GAIL (`−log(1 − D)`, siempre ≥ 0) vale ≈ 0.69 con
+  el discriminador indeciso, o sea ≈ 0.10 por decisión con `strength 0.15`, frente a ≈ 0.07 por
+  decisión de la recompensa diseñada a 21 m/s. Además ML-Agents promedia los advantages de todas las
+  señales. GAIL podría haber dominado.
+- **Sesgo de supervivencia.** Con una recompensa siempre positiva por paso y episodios que terminan en
+  fallo, sobrevivir paga (Kostrikov et al. 2019). El corte por `stall` (8 m en 5 s) limita quedarse
+  quieto, pero también terminar la vuelta antes corta recompensa futura de GAIL. Habría que vigilar la
+  duración de episodio y la fracción de vuelta, no solo `Policy/GAIL Policy Estimate`.
