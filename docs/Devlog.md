@@ -3776,3 +3776,21 @@ Si se retoma la imitación, dos cosas que el post saca de leer `mlagents` 1.1.0 
   fallo, sobrevivir paga (Kostrikov et al. 2019). El corte por `stall` (8 m en 5 s) limita quedarse
   quieto, pero también terminar la vuelta antes corta recompensa futura de GAIL. Habría que vigilar la
   duración de episodio y la fracción de vuelta, no solo `Policy/GAIL Policy Estimate`.
+
+### Post parte 5 de la serie RL: combinar BC, GAIL y PPO (2026-10-09)
+
+Quinto artículo, en `alulema/personal-website` (ES + EN). Diseña el experimento que el proyecto no corrió
+(nada de BC/GAIL/fine-tuning se ejecutó). Notas útiles si se retoma, sacadas de leer `mlagents` 1.1.0:
+- **Simultáneo vs secuencial.** Con `behavioral_cloning` + `gail` + `extrinsic` en un YAML todo corre en
+  una sola corrida de PPO; BC tiene su propio Adam sobre los pesos del actor. Para una etapa de
+  fine-tuning separada hace falta una segunda corrida con `--initialize-from`: carga no estricta, y el
+  contador de pasos vuelve a 0, así que `learning_rate`/`beta`/`epsilon` reinician desde la config de la
+  segunda corrida. Bajarlos a mano para afinar.
+- **La recompensa no lee la directiva.** Ningún `AddReward` de `RaceAgent` usa `_directive`
+  (`TargetSpeed()` depende solo de la curvatura). Un fine-tuning con solo `extrinsic` no tiene incentivo
+  para conservar la respuesta a la directiva (el experto: 112 / 100 / 79 s por vuelta con
+  conserve / random / attack). Evaluar con `-directive` forzada, no solo con tiempo por vuelta.
+- **Peso de GAIL.** La doc de ML-Agents pide `strength` < ~0.1 con demos subóptimas + extrinsic
+  (PushBlock usa 0.01); el plan de race08 tenía 0.15.
+- `eval.exe` evalúa la heurística siempre con `CleanSpawn`; no reporta tiempo por vuelta salvo en
+  `-population`. `training/README.md` §6 corregido: `race_ppo.yaml` ya no trae los bloques BC/GAIL.
