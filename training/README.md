@@ -197,10 +197,15 @@ unity\Builds\eval-windows\eval.exe -record -logFile eval-record.log
 # 2. copiarlas a donde el YAML las busca
 Copy-Item unity\Builds\eval-windows\demos\*.demo training\demos\
 
-# 3. entrenar — race_ppo.yaml ya trae los bloques behavioral_cloning + gail
+# 3. re-agregar a race_ppo.yaml los bloques behavioral_cloning + gail (ver abajo) y entrenar
 mlagents-learn training\config\race_ppo.yaml `
   --env=unity\Builds\train-windows\train.exe --num-envs=4 --run-id=race08
 ```
+
+⚠️ `race_ppo.yaml` **ya no trae** esos bloques: se quitaron antes de lanzar race08, que se
+corrió con PPO limpio (Devlog 2026-09-07), y nunca se grabaron demostraciones. Los valores que
+tenían eran `behavioral_cloning` (`demo_path: training/demos`, `strength 0.5`, `steps 2000000`)
+y `gail` (`strength 0.15`, `use_actions: true`).
 
 `behavioral_cloning.steps` (2M) es cuánto dura el empuje de BC antes de que
 domine el RL. `gail.strength` (0.15) es el peso de la recompensa de imitación

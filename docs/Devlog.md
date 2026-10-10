@@ -3693,3 +3693,122 @@ estructural que separa el estilo del LLM del de la heurística de
 referencia incluso en el mejor caso medido hasta ahora. Con esto se cierra
 definitivamente la exploración de Fase 6.3 (siete corridas en total).
 Detalle completo en `docs/experiments/`.
+
+### Post "¿Cómo aprende un agente?" (serie RL desde cero) + corrección de unidades del Devlog (2026-10-02)
+
+Primer artículo de una serie de RL desde cero que usa este repo como laboratorio, publicado en
+`alulema/personal-website` (ES + EN). Todos los datos del piloto RL (observaciones, acciones,
+recompensa, fin de episodio, hiperparámetros, métricas de race01–08) se verificaron contra
+`RaceAgent.cs`, `TrainingArena.cs`, `CarController.cs`, `race_ppo.yaml` y esta bitácora.
+
+**Corrección a entradas anteriores de este Devlog**, encontrada al verificar el post:
+`Environment/Episode Length` de ML-Agents cuenta **pasos de decisión** (los que recibe el trainer
+de Python), no pasos de física. Con `DecisionPeriod = 5` y `fixedDeltaTime = 0.02`, cada paso es
+0.1 s. Las conversiones de arriba lo trataron como pasos de física y subestiman la duración de los
+episodios 5×: "~150 steps (~3 s)" son ~15 s, "~113 (~2.3 s)" son ~11 s, y en race07 el "97% de los
+intentos mueren en <2 s" son en realidad episodios de ~10–12 s que terminan `offTrack` a ~200 m,
+en la primera curva de verdad. La evidencia está en la propia bitácora: race04 da Episode Length
+155 en TensorBoard y 673 pasos de física (~13 s) en el eval harness (673 / 5 ≈ 135). El
+diagnóstico de fondo no cambia (el agente llega a la curva y no descubre la maniobra), pero las
+duraciones sí. Lo mismo aplica al `gamma` 0.995: se descuenta por decisión, horizonte efectivo
+~200 decisiones ≈ 20 s.
+
+Otras precisiones que quedaron en el post: el 82% de la heurística de diagnóstico fue su mejor
+episodio de 24 (18 terminaron `stuck`), no su promedio; race01–08 corrieron con `MaxStep = 4000`
+(el 6000 actual es posterior al circuito fijo); y la subida de ~35–40% de la recompensa en race07
+no es atribuible solo a las observaciones de curvatura, porque esa corrida también cambió la
+recompensa de velocidad.
+
+Discrepancia abierta, no resuelta: el comentario de `CarController.Awake` atribuye a CCD
+(`CollisionDetectionMode.Continuous`) un frenazo fantasma "que persiguió a race01-08 (Devlog
+2026-09-08)", pero esta bitácora no tiene esa entrada y la de 2026-09-08 dice que la parálisis
+"era de las pistas procedurales". El post no menciona CCD.
+
+### Post parte 2 de la serie RL: PPO explicado desde cero (2026-10-03)
+
+Segundo artículo de la serie, publicado en `alulema/personal-website` (ES + EN). Los detalles de
+PPO se verificaron contra el código de `mlagents` 1.1.0 (tag `python-packages_1.1.0` del repo de
+ML-Agents), no contra documentación: la razón de probabilidades se calcula y recorta **por
+dimensión de acción** (tres razones para steer/throttle/brake), la pérdida de valor también se
+recorta con ε, el crítico es una red separada con los mismos `network_settings`, y los schedules
+lineales terminan en lr 1e-10, ε 0.1 y β 1e-5 al llegar a `max_steps`.
+
+Precisiones que salieron al verificar contra esta bitácora:
+- El piloto RL **sí** completó vueltas a veces: 2–4% de los episodios terminan en `lap`
+  (race05–08). Lo correcto es "nunca aprendió a darlas de forma consistente".
+- race01 corrió con `beta` 0.005; el 0.01 actual es desde race02.
+- Con `MaxStep = 4000` (800 decisiones), el `time_horizon: 1000` nunca cortó una trayectoria en
+  race01–08: el bootstrap del crítico solo actuó en los cortes por tiempo.
+- BC + GAIL se configuraron para race08 pero esa corrida se hizo con PPO limpio; esta bitácora no
+  registra métricas de ninguna corrida con imitación.
+
+### Post parte 3 de la serie RL: Behavioral Cloning (2026-10-06)
+
+Tercer artículo, publicado en `alulema/personal-website` (ES + EN). Al verificarlo contra este repo
+quedó claro el estado real de la imitación: existe el experto (`RaceAgent.Heuristic()`), el grabador
+(`eval.exe -record`, que agrega un `DemonstrationRecorder` por auto) y las instrucciones de
+`training/README.md` §6, pero esta bitácora no registra ninguna grabación ni ninguna corrida con BC.
+
+Cosas que el post saca de acá y que conviene tener presentes si se retoma BC:
+- `training/README.md` §6 paso 3 dice que `race_ppo.yaml` "ya trae los bloques behavioral_cloning +
+  gail"; ya no los trae. Habría que volver a agregarlos.
+- `-record` activa `CleanSpawn`: las demos arrancarían centradas, alineadas y a 14 m/s, mientras que
+  el entrenamiento arranca con ±10°, ±2 m y 8 m/s. Covariate shift desde el primer paso; convendría
+  grabar también desde arranques con ruido una vez que la heurística los tolere.
+- La heurística no es función de las 42 observaciones: filtra el volante con el comando anterior y
+  usa temporizadores (`_wallJamTimer`, `_escapeUntil`) para la reversa de escape. Una policy sin
+  memoria no puede imitar exactamente esas maniobras.
+- Con un experto programado, DAgger sería barato (correr la heurística en la sombra sobre los estados
+  que visita la policy), pero ML-Agents no lo trae y habría que construirlo.
+
+### Post parte 4 de la serie RL: GAIL (2026-10-07)
+
+Cuarto artículo, publicado en `alulema/personal-website` (ES + EN). GAIL corrió la misma suerte que
+BC: el bloque `gail` (`strength 0.15`, `use_actions: true`) se configuró para race08 y se quitó antes
+de lanzarla; no hay discriminador entrenado ni métricas.
+
+Si se retoma la imitación, dos cosas que el post saca de leer `mlagents` 1.1.0 contra esta config:
+- **El 0.15 no es un peso chico.** La recompensa de GAIL (`−log(1 − D)`, siempre ≥ 0) vale ≈ 0.69 con
+  el discriminador indeciso, o sea ≈ 0.10 por decisión con `strength 0.15`, frente a ≈ 0.07 por
+  decisión de la recompensa diseñada a 21 m/s. Además ML-Agents promedia los advantages de todas las
+  señales. GAIL podría haber dominado.
+- **Sesgo de supervivencia.** Con una recompensa siempre positiva por paso y episodios que terminan en
+  fallo, sobrevivir paga (Kostrikov et al. 2019). El corte por `stall` (8 m en 5 s) limita quedarse
+  quieto, pero también terminar la vuelta antes corta recompensa futura de GAIL. Habría que vigilar la
+  duración de episodio y la fracción de vuelta, no solo `Policy/GAIL Policy Estimate`.
+
+### Post parte 5 de la serie RL: combinar BC, GAIL y PPO (2026-10-09)
+
+Quinto artículo, en `alulema/personal-website` (ES + EN). Diseña el experimento que el proyecto no corrió
+(nada de BC/GAIL/fine-tuning se ejecutó). Notas útiles si se retoma, sacadas de leer `mlagents` 1.1.0:
+- **Simultáneo vs secuencial.** Con `behavioral_cloning` + `gail` + `extrinsic` en un YAML todo corre en
+  una sola corrida de PPO; BC tiene su propio Adam sobre los pesos del actor. Para una etapa de
+  fine-tuning separada hace falta una segunda corrida con `--initialize-from`: carga no estricta, y el
+  contador de pasos vuelve a 0, así que `learning_rate`/`beta`/`epsilon` reinician desde la config de la
+  segunda corrida. Bajarlos a mano para afinar.
+- **La recompensa no lee la directiva.** Ningún `AddReward` de `RaceAgent` usa `_directive`
+  (`TargetSpeed()` depende solo de la curvatura). Un fine-tuning con solo `extrinsic` no tiene incentivo
+  para conservar la respuesta a la directiva (el experto: 112 / 100 / 79 s por vuelta con
+  conserve / random / attack). Evaluar con `-directive` forzada, no solo con tiempo por vuelta.
+- **Peso de GAIL.** La doc de ML-Agents pide `strength` < ~0.1 con demos subóptimas + extrinsic
+  (PushBlock usa 0.01); el plan de race08 tenía 0.15.
+- `eval.exe` evalúa la heurística siempre con `CleanSpawn`; no reporta tiempo por vuelta salvo en
+  `-population`. `training/README.md` §6 corregido: `race_ppo.yaml` ya no trae los bloques BC/GAIL.
+
+### Post parte 6 de la serie RL: reward engineering (2026-10-10)
+
+Sexto artículo, en `alulema/personal-website` (ES + EN), con la recompensa de `RaceAgent` como caso de
+estudio. Cuentas que quedaron hechas y sirven si se retoma el piloto RL:
+- **Presupuesto de una vuelta del circuito fijo** (~1994 m, ~95 s; cotas, no mediciones): progreso ≈ 40,
+  velocidad objetivo ≤ ≈ 24, trazada ≈ 1.8 (paga en la práctica por metro: va × `fwdFrac`), bono 12 +
+  `fastLapBonus` ≈ 1.7 a 95 s / 2.7 a 79 s con `MaxStep` 6000. "Rápido" casi no está en la recompensa.
+- **Progreso + velocidad, por segundo**: el término de velocidad solo crea un máximo local si el objetivo
+  es < 16.25 m/s (0.25·1.3/0.02). En el circuito fijo el objetivo en curva es ≈ 18.1 m/s → la recompensa
+  nunca pide frenar por sí sola; lo único que lo hace es la salida de pista.
+- **Huecos comprobados en el código**: el término de velocidad usa `ForwardSpeed` (marco del auto), así que
+  dar círculos lentos lo cobra sin avanzar; lo corta el `stall` (5–10 s). Progreso con signo y wrap en la
+  meta: no se puede farmear.
+- **No se registran los componentes de la recompensa por separado** (`StatsRecorder` no se usa), y nunca se
+  midió cuánta recompensa saca la heurística con cada versión. Las dos cosas serían baratas y útiles.
+- Propuesta (no probada): escalar `TargetSpeed()` con `StrategyDirectiveMap.Resolve(_directive).SpeedScale`
+  como hace la heurística, para que la recompensa premie responder a la directiva.
