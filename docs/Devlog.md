@@ -3794,3 +3794,21 @@ Quinto artículo, en `alulema/personal-website` (ES + EN). Diseña el experiment
   (PushBlock usa 0.01); el plan de race08 tenía 0.15.
 - `eval.exe` evalúa la heurística siempre con `CleanSpawn`; no reporta tiempo por vuelta salvo en
   `-population`. `training/README.md` §6 corregido: `race_ppo.yaml` ya no trae los bloques BC/GAIL.
+
+### Post parte 6 de la serie RL: reward engineering (2026-10-10)
+
+Sexto artículo, en `alulema/personal-website` (ES + EN), con la recompensa de `RaceAgent` como caso de
+estudio. Cuentas que quedaron hechas y sirven si se retoma el piloto RL:
+- **Presupuesto de una vuelta del circuito fijo** (~1994 m, ~95 s; cotas, no mediciones): progreso ≈ 40,
+  velocidad objetivo ≤ ≈ 24, trazada ≈ 1.8 (paga en la práctica por metro: va × `fwdFrac`), bono 12 +
+  `fastLapBonus` ≈ 1.7 a 95 s / 2.7 a 79 s con `MaxStep` 6000. "Rápido" casi no está en la recompensa.
+- **Progreso + velocidad, por segundo**: el término de velocidad solo crea un máximo local si el objetivo
+  es < 16.25 m/s (0.25·1.3/0.02). En el circuito fijo el objetivo en curva es ≈ 18.1 m/s → la recompensa
+  nunca pide frenar por sí sola; lo único que lo hace es la salida de pista.
+- **Huecos comprobados en el código**: el término de velocidad usa `ForwardSpeed` (marco del auto), así que
+  dar círculos lentos lo cobra sin avanzar; lo corta el `stall` (5–10 s). Progreso con signo y wrap en la
+  meta: no se puede farmear.
+- **No se registran los componentes de la recompensa por separado** (`StatsRecorder` no se usa), y nunca se
+  midió cuánta recompensa saca la heurística con cada versión. Las dos cosas serían baratas y útiles.
+- Propuesta (no probada): escalar `TargetSpeed()` con `StrategyDirectiveMap.Resolve(_directive).SpeedScale`
+  como hace la heurística, para que la recompensa premie responder a la directiva.
