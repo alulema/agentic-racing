@@ -3826,8 +3826,15 @@ estudio. Notas que salieron al verificarlo contra el código y sirven si se reto
   original de CLAUDE.md §6.5.
 - **El recorte ±2 de los desplazamientos laterales casi nunca actúa**: el episodio termina a
   `halfWidth + 2 m` ≈ 1.33 medios anchos.
-- **Posible bug (sin tocar, para revisar)**: en `Heuristic()`, `_wallJamTimer` suma `Time.fixedDeltaTime`
-  (0.02 s) por llamada, pero `Heuristic()` solo corre en pasos de decisión (`DecisionPeriod = 5`, 10 Hz).
-  El umbral "> 1.0 s" equivaldría a ~5 s reales, mientras `_escapeUntil` usa `Time.time` real (0.6 s).
-  Si es así, el experto tarda ~5 s en dar reversa contra un muro, no 1 s. Verificar en el Editor antes de
-  cambiarlo (afectaría al piloto del demo).
+- **Bug del temporizador de reversa del heurístico — corregido.** `Heuristic()` solo corre en pasos de
+  decisión: `HeuristicPolicy.DecideAction` llama a `ApplyHeuristic` solo si hubo `RequestDecision`
+  (verificado en `com.unity.ml-agents` 4.0.0, `Runtime/Policies/HeuristicPolicy.cs`), y `DecisionPeriod = 5`
+  en entrenamiento, eval y carrera → 10 Hz. Pero `_wallJamTimer` sumaba `Time.fixedDeltaTime` (0.02 s) por
+  llamada, así que el umbral "> 1.0 s" equivalía a ~5 s reales, mientras `_escapeUntil` usa `Time.time` real
+  (0.6 s). Efectos: en entrenamiento/eval la reversa llegaba a la vez que el corte por `stall` (5 s) y el
+  episodio podía terminar antes; en carrera, el respawn suave de `RaceDirector` (detenido < 0.6 m/s por 4 s)
+  se adelantaba a la reversa. Fix: el temporizador avanza con el tiempo real desde la llamada anterior
+  (`_heurLastTime`, tope 0.5 s, reseteado junto con `_wallJamTimer`). Los timers de `OnActionReceived` no
+  tenían el problema (corre en cada paso con `TakeActionsBetweenDecisions`). Cambia el comportamiento del
+  piloto del demo: un auto clavado contra un muro ahora da reversa al segundo, antes del respawn de 4 s. Los
+  experimentos de Fase 6.3 se corrieron con el comportamiento anterior (afectaba a los dos grupos por igual).
