@@ -3812,3 +3812,22 @@ estudio. Cuentas que quedaron hechas y sirven si se retoma el piloto RL:
   midió cuánta recompensa saca la heurística con cada versión. Las dos cosas serían baratas y útiles.
 - Propuesta (no probada): escalar `TargetSpeed()` con `StrategyDirectiveMap.Resolve(_directive).SpeedScale`
   como hace la heurística, para que la recompensa premie responder a la directiva.
+
+### Post parte 7 de la serie RL: observation design (2026-10-11)
+
+Séptimo artículo, en `alulema/personal-website` (ES + EN), con `RaceAgent.CollectObservations` como caso de
+estudio. Notas que salieron al verificarlo contra el código y sirven si se retoma el piloto RL:
+- **`Distance01` es un código de posición en el circuito fijo.** Con 9 pistas procedurales (una por arena)
+  significaba un lugar distinto en cada una; hoy `TrackParams.Default` tiene `FixedRoundedRect = true`, así
+  que las 9 arenas de entrenamiento y evaluación usan el mismo circuito y la policy podría memorizar "girar
+  en el 37%". Además salta de 1 a 0 en la meta. Candidato a ablación antes de entrenar en el circuito fijo.
+- **El piloto no ve rivales**: los rayos solo reconocen `TrackEdge` y hay un auto por arena. `RiskTolerance`
+  solo recorta `CentreBlend` (no hay observación de proximidad que modular), a diferencia de la definición
+  original de CLAUDE.md §6.5.
+- **El recorte ±2 de los desplazamientos laterales casi nunca actúa**: el episodio termina a
+  `halfWidth + 2 m` ≈ 1.33 medios anchos.
+- **Posible bug (sin tocar, para revisar)**: en `Heuristic()`, `_wallJamTimer` suma `Time.fixedDeltaTime`
+  (0.02 s) por llamada, pero `Heuristic()` solo corre en pasos de decisión (`DecisionPeriod = 5`, 10 Hz).
+  El umbral "> 1.0 s" equivaldría a ~5 s reales, mientras `_escapeUntil` usa `Time.time` real (0.6 s).
+  Si es así, el experto tarda ~5 s en dar reversa contra un muro, no 1 s. Verificar en el Editor antes de
+  cambiarlo (afectaría al piloto del demo).
