@@ -80,6 +80,7 @@ namespace AgenticRacing.Agents
         private float _stallArc, _stallTimer;   // progress-stall check state
         private bool _endReported;   // did this episode already fire AnyEpisodeEnded?
         private float _wallJamTimer, _escapeUntil, _steerSmooth;   // heuristic control state
+        private float _heurLastTime;   // Time.time of the previous Heuristic() call (0 = none yet)
         private int _episodeSteps;   // steps taken in the current lap/episode
 
         public override void Initialize()
@@ -128,6 +129,7 @@ namespace AgenticRacing.Agents
                 _stallArc = 0f;
                 _stallTimer = 0f;
                 _wallJamTimer = 0f;
+                _heurLastTime = 0f;
                 _escapeUntil = 0f;
                 _steerSmooth = 0f;
                 _episodeSteps = 0;
@@ -184,6 +186,7 @@ namespace AgenticRacing.Agents
             _stallArc = 0f;
             _stallTimer = 0f;
             _wallJamTimer = 0f;
+            _heurLastTime = 0f;
             _escapeUntil = 0f;
             _steerSmooth = 0f;
         }
@@ -480,6 +483,7 @@ namespace AgenticRacing.Agents
             _rb.linearVelocity = tan * launchSpeed;
             _progress.Reset(_rb.position);
             _wallJamTimer = 0f;
+            _heurLastTime = 0f;
             _escapeUntil = 0f;
             _steerSmooth = 0f;
         }
@@ -533,7 +537,16 @@ namespace AgenticRacing.Agents
             bool againstWall = Mathf.Abs(carOffLeft) > 0.75f * _halfWidth;
             float noseErr = Vector3.SignedAngle(transform.forward, trackDir, Vector3.up);
 
-            _wallJamTimer = (slow && againstWall) ? _wallJamTimer + Time.fixedDeltaTime : 0f;
+            // Heuristic() only runs on decision steps (HeuristicPolicy calls it when a
+            // decision was requested: every DecisionPeriod = 5 physics steps, 10 Hz),
+            // so the jam timer has to advance by the real time since the last call,
+            // not by one physics step. Adding Time.fixedDeltaTime here made the "1 s"
+            // threshold ~5 s of real time — as long as the 5 s stall cut, so in
+            // training/eval the episode could end before the escape ever fired.
+            float now = Time.time;
+            float heurDt = _heurLastTime > 0f ? Mathf.Min(now - _heurLastTime, 0.5f) : 0f;
+            _heurLastTime = now;
+            _wallJamTimer = (slow && againstWall) ? _wallJamTimer + heurDt : 0f;
             if (Time.time < _escapeUntil || _wallJamTimer > 1.0f)
             {
                 if (_wallJamTimer > 1.0f) { _escapeUntil = Time.time + 0.6f; _wallJamTimer = 0f; }

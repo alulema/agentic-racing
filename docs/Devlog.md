@@ -3812,3 +3812,29 @@ estudio. Cuentas que quedaron hechas y sirven si se retoma el piloto RL:
   midió cuánta recompensa saca la heurística con cada versión. Las dos cosas serían baratas y útiles.
 - Propuesta (no probada): escalar `TargetSpeed()` con `StrategyDirectiveMap.Resolve(_directive).SpeedScale`
   como hace la heurística, para que la recompensa premie responder a la directiva.
+
+### Post parte 7 de la serie RL: observation design (2026-10-11)
+
+Séptimo artículo, en `alulema/personal-website` (ES + EN), con `RaceAgent.CollectObservations` como caso de
+estudio. Notas que salieron al verificarlo contra el código y sirven si se retoma el piloto RL:
+- **`Distance01` es un código de posición en el circuito fijo.** Con 9 pistas procedurales (una por arena)
+  significaba un lugar distinto en cada una; hoy `TrackParams.Default` tiene `FixedRoundedRect = true`, así
+  que las 9 arenas de entrenamiento y evaluación usan el mismo circuito y la policy podría memorizar "girar
+  en el 37%". Además salta de 1 a 0 en la meta. Candidato a ablación antes de entrenar en el circuito fijo.
+- **El piloto no ve rivales**: los rayos solo reconocen `TrackEdge` y hay un auto por arena. `RiskTolerance`
+  solo recorta `CentreBlend` (no hay observación de proximidad que modular), a diferencia de la definición
+  original de CLAUDE.md §6.5.
+- **El recorte ±2 de los desplazamientos laterales casi nunca actúa**: el episodio termina a
+  `halfWidth + 2 m` ≈ 1.33 medios anchos.
+- **Bug del temporizador de reversa del heurístico — corregido.** `Heuristic()` solo corre en pasos de
+  decisión: `HeuristicPolicy.DecideAction` llama a `ApplyHeuristic` solo si hubo `RequestDecision`
+  (verificado en `com.unity.ml-agents` 4.0.0, `Runtime/Policies/HeuristicPolicy.cs`), y `DecisionPeriod = 5`
+  en entrenamiento, eval y carrera → 10 Hz. Pero `_wallJamTimer` sumaba `Time.fixedDeltaTime` (0.02 s) por
+  llamada, así que el umbral "> 1.0 s" equivalía a ~5 s reales, mientras `_escapeUntil` usa `Time.time` real
+  (0.6 s). Efectos: en entrenamiento/eval la reversa llegaba a la vez que el corte por `stall` (5 s) y el
+  episodio podía terminar antes; en carrera, el respawn suave de `RaceDirector` (detenido < 0.6 m/s por 4 s)
+  se adelantaba a la reversa. Fix: el temporizador avanza con el tiempo real desde la llamada anterior
+  (`_heurLastTime`, tope 0.5 s, reseteado junto con `_wallJamTimer`). Los timers de `OnActionReceived` no
+  tenían el problema (corre en cada paso con `TakeActionsBetweenDecisions`). Cambia el comportamiento del
+  piloto del demo: un auto clavado contra un muro ahora da reversa al segundo, antes del respawn de 4 s. Los
+  experimentos de Fase 6.3 se corrieron con el comportamiento anterior (afectaba a los dos grupos por igual).
